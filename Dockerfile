@@ -12,19 +12,19 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching
-COPY requirements_complete.txt .
+COPY requirements.txt .
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -r requirements_complete.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
 
 # Create necessary directories
-RUN mkdir -p rag_database
+RUN mkdir -p vector_database
 
 # Expose port (Cloud Run will set PORT environment variable)
 EXPOSE 8000
 
-# Use Gunicorn to run the application
-CMD exec gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 0 api_server:app 
+# Use Uvicorn to run FastAPI application
+CMD uvicorn api_server:app --host 0.0.0.0 --port $PORT 
