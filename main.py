@@ -124,6 +124,8 @@ class MalaysiaAIBackend:
         self.collection = None
         self.vertex_ai_endpoint = None
         self.gemini_model = None
+        self.fallback_model = None
+        self.fine_tuned_model_name = None
         self.google_sheet = None
         self.is_ready = False
         self.conversation_memory = {}
@@ -185,25 +187,36 @@ class MalaysiaAIBackend:
             self.chroma_client = None
     
     async def _setup_ai_services(self):
-        """Setup both Vertex AI and Gemini API"""
+        """Setup fine-tuned Gemini model via Vertex AI"""
         try:
-            # Setup Vertex AI (your fine-tuned model)
-            logger.info("🔐 Setting up Vertex AI...")
+            # Setup Vertex AI for fine-tuned Gemini model
+            logger.info("🔐 Setting up Vertex AI for fine-tuned Gemini...")
             aiplatform.init(project=self.project_id, location=self.location)
-            endpoint_name = f"projects/{self.project_id}/locations/{self.location}/endpoints/{self.endpoint_id}"
-            self.vertex_ai_endpoint = aiplatform.Endpoint(endpoint_name)
-            logger.info("✅ Vertex AI connected!")
             
-            # Setup Gemini API as fallback
+            # Your fine-tuned Gemini 2.5 Flash model name
+            self.fine_tuned_model_name = f"projects/{self.project_id}/locations/{self.location}/models/TourismMalaysiaAI"
+            
+            # Setup Gemini API with your fine-tuned model
             gemini_api_key = os.environ.get('GEMINI_API_KEY')
             if gemini_api_key:
                 genai.configure(api_key=gemini_api_key)
-                self.gemini_model = genai.GenerativeModel('gemini-pro')
-                logger.info("✅ Gemini API configured!")
+                # Use your fine-tuned model
+                self.gemini_model = genai.GenerativeModel(self.fine_tuned_model_name)
+                logger.info("✅ Fine-tuned Gemini 2.5 Flash model connected!")
+                
+                # Fallback to standard Gemini if fine-tuned fails
+                self.fallback_model = genai.GenerativeModel('gemini-1.5-flash')
+                logger.info("✅ Fallback Gemini model configured!")
             
         except Exception as e:
             logger.error(f"❌ AI services error: {e}")
-            self.vertex_ai_endpoint = None
+            # Try standard Vertex AI endpoint as ultimate fallback
+            try:
+                endpoint_name = f"projects/{self.project_id}/locations/{self.location}/endpoints/{self.endpoint_id}"
+                self.vertex_ai_endpoint = aiplatform.Endpoint(endpoint_name)
+                logger.info("✅ Vertex AI endpoint fallback connected!")
+            except:
+                self.vertex_ai_endpoint = None
     
     async def _setup_google_sheets(self):
         """Setup Google Sheets for feedback"""
@@ -406,23 +419,38 @@ User question: {query}{location_text}{history_text}{context_text}
 Provide a helpful, accurate response about Malaysia in 150-200 words. Include specific recommendations with practical details like locations, pricing ranges, and unique features when possible.
 Be conversational and enthusiastic about Malaysia's diversity."""
 
-            # Try Vertex AI first (your fine-tuned model)
-            if self.vertex_ai_endpoint:
+            # Try your fine-tuned Gemini 2.5 Flash model first
+            if self.gemini_model:
+                try:
+                    response = self.gemini_model.generate_content(prompt)
+                    if response and response.text:
+                        logger.info("✅ Response from fine-tuned Gemini 2.5 Flash")
+                        return response.text.strip()
+                except Exception as e:
+                    logger.warning(f"Fine-tuned Gemini error, trying fallback: {e}")
+            
+            # Fallback to standard Gemini model
+            if hasattr(self, 'fallback_model') and self.fallback_model:
+                try:
+                    response = self.fallback_model.generate_content(prompt)
+                    if response and response.text:
+                        logger.info("✅ Response from fallback Gemini model")
+                        return response.text.strip()
+                except Exception as e:
+                    logger.warning(f"Fallback Gemini error, trying Vertex AI: {e}")
+            
+            # Ultimate fallback to Vertex AI endpoint
+            if hasattr(self, 'vertex_ai_endpoint') and self.vertex_ai_endpoint:
                 try:
                     instances = [{"content": prompt}]
                     response = self.vertex_ai_endpoint.predict(instances=instances)
                     
                     if response and response.predictions:
+                        logger.info("✅ Response from Vertex AI endpoint")
                         return response.predictions[0].get('content', 
                             "I'd love to help you explore Malaysia! Could you tell me more about what you're looking for?")
                 except Exception as e:
-                    logger.warning(f"Vertex AI error, falling back to Gemini: {e}")
-            
-            # Fallback to Gemini API
-            if self.gemini_model:
-                response = self.gemini_model.generate_content(prompt)
-                if response and response.text:
-                    return response.text.strip()
+                    logger.warning(f"Vertex AI endpoint error: {e}")
             
             # Ultimate fallback
             return "I'm here to help you discover amazing Malaysia! Please ask me about food, destinations, or travel experiences you're interested in."
