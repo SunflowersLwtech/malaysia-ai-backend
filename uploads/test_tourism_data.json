@@ -1,0 +1,32 @@
+[
+  {
+    "content": "Petronas Twin Towers are iconic skyscrapers in Kuala Lumpur, Malaysia. Standing at 452 meters tall, they were the world's tallest buildings from 1998 to 2004. The towers feature Islamic geometric patterns and house offices, shopping centers, and observation decks.",
+    "location": "Kuala Lumpur",
+    "category": "attraction",
+    "rating": 4.5
+  },
+  {
+    "content": "Langkawi Island is a tropical paradise in Malaysia known for its pristine beaches, crystal-clear waters, and lush rainforests. Popular activities include cable car rides, island hopping, and duty-free shopping.",
+    "location": "Langkawi",
+    "category": "destination",
+    "rating": 4.7
+  },
+  {
+    "content": "Penang is famous for its street food scene, offering dishes like Char Kway Teow, Assam Laksa, and Cendol. Georgetown's heritage streets are lined with food stalls serving authentic Malaysian cuisine.",
+    "location": "Penang",
+    "category": "food",
+    "rating": 4.8
+  },
+  {
+    "content": "Mount Kinabalu in Sabah is Malaysia's highest peak at 4,095 meters. It's a UNESCO World Heritage site offering challenging climbing experiences and diverse flora and fauna.",
+    "location": "Sabah",
+    "category": "adventure",
+    "rating": 4.6
+  },
+  {
+    "content": "Malacca (Melaka) is a historic city with rich cultural heritage. Visitors can explore Jonker Street, A Famosa fortress, and enjoy Peranakan cuisine and culture.",
+    "location": "Malacca",
+    "category": "heritage",
+    "rating": 4.4
+  }
+] 
