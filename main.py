@@ -134,32 +134,44 @@ class MalaysiaAIBackend:
         asyncio.create_task(self._initialize_async())
     
     async def _initialize_async(self):
-        """Async initialization of all components"""
+        """Async initialization of all components with graceful degradation"""
+        logger.info("🚀 Initializing Malaysia AI Backend (FastAPI + Cloud Run)...")
+        
+        # Initialize with graceful fallback - each wrapped in try/except
         try:
-            logger.info("🚀 Initializing Malaysia AI Backend (FastAPI + Cloud Run)...")
-            
-            # 1. Initialize embedding model
-            await self._setup_embeddings()
-            
-            # 2. Initialize ChromaDB
-            await self._setup_chromadb()
-            
-            # 3. Initialize AI services
-            await self._setup_ai_services()
-            
-            # 4. Initialize Google Sheets
-            await self._setup_google_sheets()
-            
-            # 5. Load and process data
-            await self._load_and_process_data()
-            
-            self.is_ready = True
-            logger.info("🎉 Malaysia AI Backend initialization complete!")
-            
+            await self._setup_ai_services()  # Most critical first
         except Exception as e:
-            logger.error(f"❌ Initialization error: {str(e)}")
-            # Continue with degraded functionality
-            self.is_ready = False
+            logger.warning(f"AI services setup failed: {e}")
+        
+        try:
+            await self._setup_embeddings()
+        except Exception as e:
+            logger.warning(f"Embeddings setup failed: {e}")
+        
+        try:
+            await self._setup_chromadb()
+        except Exception as e:
+            logger.warning(f"ChromaDB setup failed: {e}")
+        
+        try:
+            await self._setup_google_sheets()
+        except Exception as e:
+            logger.warning(f"Google Sheets setup failed: {e}")
+        
+        # Mark as ready even if some components failed
+        self.is_ready = True
+        logger.info("🎉 Malaysia AI Backend ready! Starting background data loading...")
+        
+        # Data loading is optional - do in background
+        asyncio.create_task(self._load_and_process_data_safely())
+    
+    async def _load_and_process_data_safely(self):
+        """Safely load data in background"""
+        try:
+            await self._load_and_process_data()
+            logger.info("✅ Background data loading completed!")
+        except Exception as e:
+            logger.warning(f"⚠️ Background data loading failed: {e}, continuing without pre-loaded data")
     
     async def _setup_embeddings(self):
         """Setup sentence transformer model"""
@@ -169,7 +181,7 @@ class MalaysiaAIBackend:
             self.embedding_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
             logger.info("✅ Embedding model loaded!")
         except Exception as e:
-            logger.error(f"❌ Embedding model error: {e}")
+            logger.warning(f"⚠️ Embedding model error: {e}, continuing without vector search")
             self.embedding_model = None
     
     async def _setup_chromadb(self):
@@ -183,7 +195,7 @@ class MalaysiaAIBackend:
             )
             logger.info("✅ ChromaDB initialized!")
         except Exception as e:
-            logger.error(f"❌ ChromaDB error: {e}")
+            logger.warning(f"⚠️ ChromaDB error: {e}, continuing without vector storage")
             self.chroma_client = None
     
     async def _setup_ai_services(self):
@@ -226,13 +238,14 @@ class MalaysiaAIBackend:
                 logger.info("✅ Fallback Gemini model configured!")
             
         except Exception as e:
-            logger.error(f"❌ AI services error: {e}")
+            logger.warning(f"⚠️ AI services error: {e}, trying fallback")
             # Try standard Vertex AI endpoint as ultimate fallback
             try:
                 endpoint_name = f"projects/{self.project_id}/locations/{self.location}/endpoints/{self.endpoint_id}"
                 self.vertex_ai_endpoint = aiplatform.Endpoint(endpoint_name)
                 logger.info("✅ Vertex AI endpoint fallback connected!")
-            except:
+            except Exception as fallback_error:
+                logger.warning(f"⚠️ Fallback AI also failed: {fallback_error}, continuing with basic responses")
                 self.vertex_ai_endpoint = None
     
     async def _setup_google_sheets(self):

@@ -9,33 +9,37 @@ RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     curl \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install Python dependencies
-COPY requirements_cloudrun_fixed.txt .
-RUN pip install --no-cache-dir -r requirements_cloudrun_fixed.txt
+# Set environment variables first
+ENV PYTHONUNBUFFERED=1
+ENV PORT=8000
+ENV PYTHONPATH=/app
+ENV TOKENIZERS_PARALLELISM=false
 
-# Copy application code
+# Copy and install requirements with better caching
+COPY requirements_cloudrun.txt .
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+RUN pip install --no-cache-dir -r requirements_cloudrun.txt
+
+# Copy application code and data
 COPY main.py .
-COPY start.py .
 COPY bright-coyote-463315-q8-59797318b374.json .
 COPY *.csv ./
 COPY *.jsonl ./
 COPY *.xlsx ./
 
-# Create directory for vector database
-RUN mkdir -p ./vector_db
+# Create necessary directories
+RUN mkdir -p /app/chroma_data
+RUN mkdir -p /app/vector_db
 
-# Set environment variables
-ENV PYTHONPATH=/app
-ENV PYTHONUNBUFFERED=1
+# Health check with longer timeout
+HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:${PORT}/health || exit 1
 
-# Expose port (Cloud Run will set PORT environment variable)
-EXPOSE 8000
+# Expose the port
+EXPOSE ${PORT}
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
-
-# Run the application with robust startup
-CMD exec python start.py 
+# Run with uvicorn directly for better startup
+CMD exec uvicorn main:app --host 0.0.0.0 --port ${PORT} --workers 1 --timeout-keep-alive 300 
