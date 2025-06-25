@@ -12,11 +12,12 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
-COPY requirements_cloudrun.txt .
-RUN pip install --no-cache-dir -r requirements_cloudrun.txt
+COPY requirements_cloudrun_fixed.txt .
+RUN pip install --no-cache-dir -r requirements_cloudrun_fixed.txt
 
 # Copy application code
 COPY main.py .
+COPY start.py .
 COPY bright-coyote-463315-q8-59797318b374.json .
 COPY *.csv ./
 COPY *.jsonl ./
@@ -36,5 +37,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Run the application
-CMD exec uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1 
+# Run the application with robust startup
+CMD exec python start.py 

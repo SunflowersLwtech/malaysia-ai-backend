@@ -193,19 +193,36 @@ class MalaysiaAIBackend:
             logger.info("🔐 Setting up Vertex AI for fine-tuned Gemini...")
             aiplatform.init(project=self.project_id, location=self.location)
             
-            # Your fine-tuned Gemini 2.5 Flash model name
-            self.fine_tuned_model_name = f"projects/{self.project_id}/locations/{self.location}/models/TourismMalaysiaAI"
-            
             # Setup Gemini API with your fine-tuned model
             gemini_api_key = os.environ.get('GEMINI_API_KEY')
             if gemini_api_key:
                 genai.configure(api_key=gemini_api_key)
-                # Use your fine-tuned model
-                self.gemini_model = genai.GenerativeModel(self.fine_tuned_model_name)
-                logger.info("✅ Fine-tuned Gemini 2.5 Flash model connected!")
                 
-                # Fallback to standard Gemini if fine-tuned fails
-                self.fallback_model = genai.GenerativeModel('gemini-1.5-flash')
+                # Try to use your fine-tuned model - multiple possible formats
+                fine_tuned_model_options = [
+                    f"projects/{self.project_id}/locations/{self.location}/models/TourismMalaysiaAI",
+                    "TourismMalaysiaAI",
+                    f"publishers/google/models/gemini-2.5-flash-001:tunedModels/TourismMalaysiaAI"
+                ]
+                
+                self.gemini_model = None
+                for model_name in fine_tuned_model_options:
+                    try:
+                        self.gemini_model = genai.GenerativeModel(model_name)
+                        self.fine_tuned_model_name = model_name
+                        logger.info(f"✅ Fine-tuned Gemini model connected: {model_name}")
+                        break
+                    except Exception as e:
+                        logger.warning(f"Failed to connect to {model_name}: {e}")
+                        continue
+                
+                # If fine-tuned model fails, use standard Gemini
+                if not self.gemini_model:
+                    self.gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+                    logger.info("✅ Using standard Gemini 1.5 Flash as primary model")
+                
+                # Always set up fallback
+                self.fallback_model = genai.GenerativeModel('gemini-1.5-pro')
                 logger.info("✅ Fallback Gemini model configured!")
             
         except Exception as e:

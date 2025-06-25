@@ -1,0 +1,27 @@
+# FastAPI and async server
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+
+# Google Cloud services (more stable versions)
+google-cloud-aiplatform==1.36.0
+google-generativeai==0.3.2
+
+# Vector database and embeddings (lighter versions)
+chromadb==0.4.15
+sentence-transformers==2.2.2
+
+# Data processing (stable versions)
+pandas==2.0.3
+numpy==1.24.3
+
+# Google Sheets integration
+gspread==5.12.0
+google-auth==2.23.4
+
+# HTTP and utilities
+httpx==0.25.2
+python-multipart==0.0.6
+requests==2.31.0
+
+# Additional dependencies
+Pillow==9.5.0 
