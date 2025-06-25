@@ -549,8 +549,10 @@ Keep your response conversational and informative, around 150-200 words."""
         except Exception as e:
             logger.error(f"❌ Feedback save error: {str(e)}")
     
-    def run(self, host='0.0.0.0', port=5000, debug=False):
+    def run(self, host='0.0.0.0', port=None, debug=False):
         """Run the Flask application"""
+        if port is None:
+            port = int(os.environ.get('PORT', 5000))
         logger.info(f"🚀 Starting Malaysia AI Guide API on {host}:{port}")
         self.app.run(host=host, port=port, debug=debug)
 
@@ -559,7 +561,8 @@ malaysia_ai = MalaysiaAIGuide()
 
 if __name__ == '__main__':
     # For local development
-    malaysia_ai.run(debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    malaysia_ai.run(debug=True, port=port)
 else:
     # For production (Gunicorn)
     app = malaysia_ai.app
