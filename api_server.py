@@ -1,568 +1,654 @@
-#!/usr/bin/env python3
-"""
-Malaysia AI Travel Guide - Backend API Server
-Professional Flask API with Vertex AI integration and RAG capabilities
-"""
-
 import os
-import sys
-import logging
-import traceback
-from datetime import datetime
-from typing import List, Dict, Any, Optional
 import json
-import pandas as pd
-import numpy as np
-from io import BytesIO
-import base64
+import logging
+import asyncio
+from datetime import datetime
+from typing import List, Dict, Optional, Any
+import traceback
 
-# Flask and CORS
-from flask import Flask, request, jsonify, send_from_directory
-from flask_cors import CORS
+# FastAPI imports
+from fastapi import FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
-# Google Cloud and AI
+# Google Cloud and AI imports
+import vertexai
+from vertexai.preview.generative_models import GenerativeModel
 from google.cloud import aiplatform
-from google.oauth2 import service_account
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+import google.generativeai as genai
 
-# Vector Database and ML
+# Vector database and embeddings
 import chromadb
+from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 
-# Image processing
-from PIL import Image
+# Data processing
+import pandas as pd
+import numpy as np
 
-# Environment variables
-from dotenv import load_dotenv
-load_dotenv()
+# Google services
+import gspread
+from google.auth import default
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class MalaysiaAIGuide:
-    """
-    Professional RAG system for Malaysia tourism and food recommendations
-    """
-    
-    def __init__(self):
-        self.app = Flask(__name__)
-        CORS(self.app)
+# Pydantic models
+class ChatRequest(BaseModel):
+    message: str
+    conversation_id: Optional[str] = None
+
+class ChatResponse(BaseModel):
+    response: str
+    conversation_id: str
+    sources: List[Dict[str, Any]] = []
+
+class HealthResponse(BaseModel):
+    status: str
+    timestamp: str
+    components: Dict[str, str]
+
+class StatusResponse(BaseModel):
+    service: str
+    status: str
+    version: str
+    model_status: str
+    database_status: str
+
+# Global variables for services
+embedding_model = None
+chroma_client = None
+collection = None
+vertex_model = None
+genai_model = None
+google_sheets_client = None
+conversation_memory = {}
+
+# Initialize FastAPI app
+app = FastAPI(
+    title="Malaysia AI Travel Guide",
+    description="Complete RAG-powered travel guide for Malaysia",
+    version="2.0.0"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+def initialize_embedding_model():
+    """Initialize sentence transformer model for embeddings"""
+    global embedding_model
+    try:
+        logger.info("Initializing embedding model...")
+        embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        logger.info("Embedding model initialized successfully")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to initialize embedding model: {e}")
+        return False
+
+def initialize_chromadb():
+    """Initialize ChromaDB client and collection"""
+    global chroma_client, collection
+    try:
+        logger.info("Initializing ChromaDB...")
         
-        # Configuration
-        self.project_id = "bright-coyote-463315-q8"
-        self.location = "us-west1"
-        self.endpoint_id = "4352232060597829632"
-        self.sheet_id = "1tE80wYY5yqEW0uR553RcnM7IkKqhQF1INtmgf54aRp4"
+        # Initialize ChromaDB client
+        chroma_client = chromadb.PersistentClient(
+            path="./rag_database",
+            settings=Settings(anonymized_telemetry=False)
+        )
         
-        # Initialize components
-        self.embedding_model = None
-        self.chroma_client = None
-        self.collection = None
-        self.vertex_ai_endpoint = None
-        self.google_sheet = None
-        self.is_ready = False
-        self.conversation_memory = {}
-        
-        logger.info("🚀 Initializing Malaysia AI Travel Guide...")
-        self._initialize_components()
-        self._setup_routes()
-    
-    def _initialize_components(self):
-        """Initialize all AI and database components"""
+        # Get or create collection
+        collection_name = "malaysia_tourism"
         try:
-            # 1. Initialize embedding model
-            logger.info("📥 Loading embedding model...")
-            self.embedding_model = SentenceTransformer('paraphrase-multilingual-mpnet-base-v2')
-            logger.info("✅ Embedding model loaded successfully!")
+            collection = chroma_client.get_collection(collection_name)
+            logger.info(f"Loaded existing collection: {collection_name}")
+        except:
+            collection = chroma_client.create_collection(collection_name)
+            logger.info(f"Created new collection: {collection_name}")
             
-            # 2. Initialize ChromaDB
-            logger.info("🗄️ Initializing ChromaDB...")
-            self.chroma_client = chromadb.PersistentClient(path="./vector_database")
-            self.collection = self.chroma_client.get_or_create_collection(
-                name="malaysia_travel_guide",
-                metadata={"description": "Malaysia tourism and food data"}
-            )
-            logger.info("✅ ChromaDB initialized successfully!")
-            
-            # 3. Initialize Vertex AI
-            self._setup_vertex_ai()
-            
-            # 4. Initialize Google Sheets
-            self._setup_google_sheets()
-            
-            # 5. Load data if available
-            self._load_data()
-            
-            self.is_ready = True
-            logger.info("🎉 Malaysia AI Guide initialization complete!")
-            
-        except Exception as e:
-            logger.error(f"❌ Initialization error: {str(e)}")
-            logger.error(traceback.format_exc())
-    
-    def _setup_vertex_ai(self):
-        """Setup Vertex AI connection"""
-        try:
-            logger.info("🔐 Setting up Vertex AI connection...")
-            
-            # Initialize Vertex AI
-            aiplatform.init(
-                project=self.project_id,
-                location=self.location
-            )
-            
-            # Get the endpoint
-            endpoint_name = f"projects/{self.project_id}/locations/{self.location}/endpoints/{self.endpoint_id}"
-            self.vertex_ai_endpoint = aiplatform.Endpoint(endpoint_name)
-            
-            logger.info("✅ Vertex AI connection established!")
-            
-        except Exception as e:
-            logger.error(f"❌ Vertex AI setup failed: {str(e)}")
-            self.vertex_ai_endpoint = None
-    
-    def _setup_google_sheets(self):
-        """Setup Google Sheets connection for feedback"""
-        try:
-            logger.info("📊 Setting up Google Sheets connection...")
-            
-            # Define the scope
-            scope = [
-                "https://spreadsheets.google.com/feeds",
-                "https://www.googleapis.com/auth/drive"
-            ]
-            
-            # Load credentials
-            creds = ServiceAccountCredentials.from_json_keyfile_name(
-                'credentials.json', scope
-            )
-            
-            # Authorize and open sheet
-            client = gspread.authorize(creds)
-            self.google_sheet = client.open_by_key(self.sheet_id).sheet1
-            
-            logger.info("✅ Google Sheets connection established!")
-            
-        except Exception as e:
-            logger.error(f"❌ Google Sheets setup failed: {str(e)}")
-            self.google_sheet = None
-    
-    def _load_data(self):
-        """Load and process data files into vector database"""
-        try:
-            logger.info("📂 Loading data files...")
-            
-            data_files = [
-                "RestaurantOriginalCSV.csv",
-                "vertex_ai_training_data.jsonl",
-                "Curation Queue (3).xlsx"
-            ]
-            
-            all_data = []
-            
-            for file_path in data_files:
-                if os.path.exists(file_path):
-                    logger.info(f"📄 Processing {file_path}...")
-                    
-                    if file_path.endswith('.csv'):
-                        df = pd.read_csv(file_path)
-                        df['source_file'] = file_path
-                        all_data.append(df)
-                    
-                    elif file_path.endswith('.jsonl'):
-                        data = []
-                        with open(file_path, 'r', encoding='utf-8') as f:
-                            for line in f:
-                                if line.strip():
-                                    try:
-                                        data.append(json.loads(line))
-                                    except:
-                                        continue
-                        df = pd.DataFrame(data)
-                        df['source_file'] = file_path
-                        all_data.append(df)
-                    
-                    elif file_path.endswith('.xlsx'):
-                        df = pd.read_excel(file_path)
-                        df['source_file'] = file_path
-                        all_data.append(df)
-            
-            if all_data:
-                # Combine all data
-                combined_df = pd.concat(all_data, ignore_index=True, sort=False)
-                logger.info(f"📊 Combined {len(combined_df)} records from {len(all_data)} files")
-                
-                # Process and store in vector database
-                self._process_and_store_data(combined_df)
-            
-        except Exception as e:
-            logger.error(f"❌ Data loading error: {str(e)}")
-    
-    def _process_and_store_data(self, df):
-        """Process data and store in vector database"""
-        try:
-            logger.info("🔧 Processing data for vector storage...")
-            
-            # Create combined text for each record
-            df['combined_text'] = df.apply(self._create_combined_text, axis=1)
-            
-            # Process in batches
-            batch_size = 100
-            total_batches = (len(df) + batch_size - 1) // batch_size
-            
-            for i in range(total_batches):
-                start_idx = i * batch_size
-                end_idx = min(start_idx + batch_size, len(df))
-                batch_df = df.iloc[start_idx:end_idx]
-                
-                # Generate embeddings
-                texts = batch_df['combined_text'].tolist()
-                embeddings = self.embedding_model.encode(texts)
-                
-                # Prepare metadata
-                metadatas = []
-                for _, row in batch_df.iterrows():
-                    metadata = {}
-                    for col in batch_df.columns:
-                        if col != 'combined_text':
-                            value = row[col]
-                            if pd.notna(value):
-                                metadata[col] = str(value)[:1000]  # Limit length
-                    metadatas.append(metadata)
-                
-                # Generate IDs
-                ids = [f"doc_{start_idx + j}" for j in range(len(batch_df))]
-                
-                # Store in ChromaDB
-                self.collection.upsert(
-                    embeddings=embeddings.tolist(),
-                    documents=texts,
-                    metadatas=metadatas,
-                    ids=ids
-                )
-                
-                logger.info(f"✅ Processed batch {i+1}/{total_batches}")
-            
-            logger.info(f"🎉 Successfully stored {len(df)} records in vector database!")
-            
-        except Exception as e:
-            logger.error(f"❌ Data processing error: {str(e)}")
-    
-    def _create_combined_text(self, row):
-        """Create searchable text from row data"""
-        text_parts = []
+            # Load data if collection is new
+            load_tourism_data()
         
-        # Define important fields to prioritize
-        priority_fields = ['name', 'title', 'description', 'category', 'location', 'address']
+        logger.info("ChromaDB initialized successfully")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to initialize ChromaDB: {e}")
+        return False
+
+def load_tourism_data():
+    """Load tourism data into ChromaDB"""
+    try:
+        logger.info("Loading tourism data...")
         
-        for field in priority_fields:
-            for col in row.index:
-                if field.lower() in col.lower() and pd.notna(row[col]):
-                    text_parts.append(str(row[col]))
-        
-        # Add other non-null fields
-        for col in row.index:
-            if col not in ['combined_text', 'source_file'] and pd.notna(row[col]):
-                value = str(row[col])
-                if value not in text_parts and len(value) > 2:
-                    text_parts.append(value)
-        
-        return ' | '.join(text_parts[:10])  # Limit to first 10 parts
-    
-    def _setup_routes(self):
-        """Setup Flask routes"""
-        
-        @self.app.route('/')
-        def home():
-            return jsonify({
-                "service": "Malaysia AI Travel Guide API",
-                "version": "1.0.0",
-                "status": "running",
-                "endpoints": {
-                    "GET /": "Service information",
-                    "GET /health": "Health check",
-                    "POST /ask": "Ask questions about Malaysia",
-                    "POST /feedback": "Submit feedback",
-                    "GET /stats": "Get database statistics"
-                }
-            })
-        
-        @self.app.route('/health')
-        def health():
-            return jsonify({
-                "status": "healthy" if self.is_ready else "initializing",
-                "vertex_ai": "connected" if self.vertex_ai_endpoint else "disconnected",
-                "database": "ready" if self.collection else "not_ready",
-                "google_sheets": "connected" if self.google_sheet else "disconnected",
-                "timestamp": datetime.now().isoformat()
-            })
-        
-        @self.app.route('/ask', methods=['POST'])
-        def ask_question():
-            try:
-                data = request.get_json()
-                if not data or 'query' not in data:
-                    return jsonify({"error": "Missing 'query' in request"}), 400
-                
-                query = data['query']
-                user_id = data.get('user_id', 'anonymous')
-                location = data.get('location')
-                image_data = data.get('image')
-                max_results = data.get('max_results', 5)
-                
-                # Process the query
-                result = self._process_query(
-                    query=query,
-                    user_id=user_id,
-                    location=location,
-                    image_data=image_data,
-                    max_results=max_results
-                )
-                
-                return jsonify(result)
-                
-            except Exception as e:
-                logger.error(f"❌ Query processing error: {str(e)}")
-                return jsonify({
-                    "error": "Internal server error",
-                    "message": str(e)
-                }), 500
-        
-        @self.app.route('/feedback', methods=['POST'])
-        def submit_feedback():
-            try:
-                data = request.get_json()
-                if not data:
-                    return jsonify({"error": "No data provided"}), 400
-                
-                # Save feedback to Google Sheets
-                self._save_feedback(data)
-                
-                return jsonify({"success": True, "message": "Feedback saved successfully"})
-                
-            except Exception as e:
-                logger.error(f"❌ Feedback error: {str(e)}")
-                return jsonify({
-                    "error": "Failed to save feedback",
-                    "message": str(e)
-                }), 500
-        
-        @self.app.route('/stats')
-        def get_stats():
-            try:
-                stats = {
-                    "total_records": self.collection.count() if self.collection else 0,
-                    "is_ready": self.is_ready,
-                    "services": {
-                        "vertex_ai": bool(self.vertex_ai_endpoint),
-                        "vector_database": bool(self.collection),
-                        "google_sheets": bool(self.google_sheet)
-                    }
-                }
-                return jsonify(stats)
-                
-            except Exception as e:
-                return jsonify({"error": str(e)}), 500
-    
-    def _process_query(self, query: str, user_id: str, location: Optional[str] = None, 
-                      image_data: Optional[str] = None, max_results: int = 5) -> Dict[str, Any]:
-        """Process user query and return comprehensive response"""
-        try:
-            logger.info(f"🔍 Processing query: {query[:100]}...")
-            
-            # 1. Search vector database
-            search_results = self._search_vector_database(query, max_results)
-            
-            # 2. Generate AI response using Vertex AI
-            ai_response = self._generate_ai_response(
-                query=query, 
-                context=search_results,
-                location=location,
-                user_id=user_id
-            )
-            
-            # 3. Process image if provided
-            image_analysis = None
-            if image_data:
-                image_analysis = self._analyze_image(image_data, query)
-            
-            # 4. Update conversation memory
-            self._update_conversation_memory(user_id, query, ai_response)
-            
-            return {
-                "query": query,
-                "ai_response": ai_response,
-                "sources": search_results,
-                "image_analysis": image_analysis,
-                "location_context": location,
-                "timestamp": datetime.now().isoformat(),
-                "success": True
+        # Sample tourism data
+        tourism_data = [
+            {
+                "id": "dest_kl",
+                "content": "Kuala Lumpur is Malaysia's capital and largest city. Key attractions include the Petronas Twin Towers, KL Tower, Batu Caves, Central Market, and Chinatown. The city offers excellent shopping at Bukit Bintang and diverse street food.",
+                "category": "destination",
+                "location": "Kuala Lumpur"
+            },
+            {
+                "id": "dest_penang",
+                "content": "Penang is known as the Pearl of the Orient. George Town is a UNESCO World Heritage site with colonial architecture, street art, and incredible food scene. Must-visit: Penang Hill, Kek Lok Si Temple, and local hawker centers.",
+                "category": "destination",
+                "location": "Penang"
+            },
+            {
+                "id": "food_nasi_lemak",
+                "content": "Nasi Lemak is Malaysia's national dish. Coconut rice served with sambal, fried anchovies, peanuts, cucumber, and boiled egg. Often accompanied by rendang, fried chicken, or curry. Available from street stalls to high-end restaurants.",
+                "category": "food",
+                "location": "Malaysia"
+            },
+            {
+                "id": "food_char_kway_teow",
+                "content": "Char Kway Teow is a popular stir-fried noodle dish from Penang. Flat rice noodles wok-fried with prawns, cockles, Chinese sausage, eggs, bean sprouts, and chives in dark soy sauce. Best enjoyed from street vendors.",
+                "category": "food",
+                "location": "Penang"
+            },
+            {
+                "id": "culture_festivals",
+                "content": "Malaysia celebrates diverse festivals: Chinese New Year, Hari Raya, Deepavali, Christmas. Each celebration features unique traditions, foods, and decorations. Many festivals are public holidays with special events nationwide.",
+                "category": "culture",
+                "location": "Malaysia"
             }
-            
-        except Exception as e:
-            logger.error(f"❌ Query processing error: {str(e)}")
-            return {
-                "query": query,
-                "ai_response": "I apologize, but I encountered an error processing your request. Please try again.",
-                "error": str(e),
-                "success": False
-            }
-    
-    def _search_vector_database(self, query: str, max_results: int) -> List[Dict[str, Any]]:
-        """Search the vector database for relevant information"""
-        try:
-            if not self.collection or not self.embedding_model:
-                return []
-            
-            # Generate query embedding
-            query_embedding = self.embedding_model.encode([query])
-            
-            # Search ChromaDB
-            results = self.collection.query(
-                query_embeddings=query_embedding.tolist(),
-                n_results=max_results
-            )
-            
-            # Format results
-            formatted_results = []
-            for i in range(len(results['ids'][0])):
-                result = {
-                    "content": results['documents'][0][i],
-                    "metadata": results['metadatas'][0][i],
-                    "similarity": 1 - results['distances'][0][i],  # Convert distance to similarity
-                    "source_file": results['metadatas'][0][i].get('source_file', 'unknown')
-                }
-                formatted_results.append(result)
-            
-            return formatted_results
-            
-        except Exception as e:
-            logger.error(f"❌ Vector search error: {str(e)}")
+        ]
+        
+        # Generate embeddings and add to collection
+        for data in tourism_data:
+            if embedding_model:
+                embedding = embedding_model.encode(data["content"]).tolist()
+                collection.add(
+                    embeddings=[embedding],
+                    documents=[data["content"]],
+                    metadatas=[{
+                        "category": data["category"],
+                        "location": data["location"],
+                        "id": data["id"]
+                    }],
+                    ids=[data["id"]]
+                )
+        
+        logger.info(f"Loaded {len(tourism_data)} tourism entries")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to load tourism data: {e}")
+        return False
+
+def initialize_vertex_ai():
+    """Initialize Vertex AI model"""
+    global vertex_model
+    try:
+        logger.info("Initializing Vertex AI...")
+        
+        # Check for service account key
+        service_account_path = "bright-coyote-463315-q8-59797318b374.json"
+        if os.path.exists(service_account_path):
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = service_account_path
+        
+        # Initialize Vertex AI
+        project_id = "bright-coyote-463315-q8"
+        location = "us-west1"
+        
+        vertexai.init(project=project_id, location=location)
+        
+        # Initialize your fine-tuned model endpoint (TourismMalaysiaAI)
+        endpoint_id = "4352232060597829632"
+        
+        # Create endpoint connection for your fine-tuned model
+        endpoint = aiplatform.Endpoint(
+            endpoint_name=f"projects/{project_id}/locations/{location}/endpoints/{endpoint_id}"
+        )
+        
+        # Use the endpoint for predictions
+        vertex_model = endpoint
+        
+        logger.info("Vertex AI fine-tuned model (TourismMalaysiaAI) initialized successfully")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to initialize Vertex AI: {e}")
+        return False
+
+def initialize_genai_fallback():
+    """Initialize Gemini API as fallback"""
+    global genai_model
+    try:
+        logger.info("Initializing Gemini fallback...")
+        
+        # Configure Gemini API (you'll need to set your API key)
+        api_key = os.getenv("GEMINI_API_KEY")
+        if api_key:
+            genai.configure(api_key=api_key)
+            genai_model = genai.GenerativeModel('gemini-1.5-flash')
+            logger.info("Gemini fallback initialized successfully")
+            return True
+        else:
+            logger.warning("GEMINI_API_KEY not found, fallback unavailable")
+            return False
+    except Exception as e:
+        logger.error(f"Failed to initialize Gemini fallback: {e}")
+        return False
+
+def initialize_google_sheets():
+    """Initialize Google Sheets client for feedback"""
+    global google_sheets_client
+    try:
+        logger.info("Initializing Google Sheets...")
+        
+        # Use service account for authentication
+        google_sheets_client = gspread.service_account(filename="bright-coyote-463315-q8-59797318b374.json")
+        
+        logger.info("Google Sheets initialized successfully")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to initialize Google Sheets: {e}")
+        return False
+
+def search_knowledge_base(query: str, limit: int = 5) -> List[Dict[str, Any]]:
+    """Search the knowledge base using vector similarity"""
+    try:
+        if not collection or not embedding_model:
+            logger.warning("ChromaDB or embedding model not available")
             return []
-    
-    def _generate_ai_response(self, query: str, context: List[Dict], 
-                             location: Optional[str] = None, user_id: str = "anonymous") -> str:
-        """Generate AI response using Vertex AI"""
-        try:
-            if not self.vertex_ai_endpoint:
-                return "I apologize, but the AI service is currently unavailable. Please try again later."
-            
-            # Prepare context
-            context_text = ""
-            if context:
-                context_text = "\n\nRelevant information:\n"
-                for i, item in enumerate(context[:3], 1):
-                    context_text += f"{i}. {item['content'][:300]}...\n"
-            
-            # Get conversation history
-            history = self.conversation_memory.get(user_id, [])
-            history_text = ""
-            if history:
-                recent_history = history[-3:]  # Last 3 exchanges
-                history_text = "\n\nRecent conversation:\n"
-                for h in recent_history:
-                    history_text += f"User: {h['query']}\nAssistant: {h['response'][:200]}...\n"
-            
-            # Create comprehensive prompt
-            location_context = f"\nUser's location: {location}" if location else ""
-            
-            prompt = f"""You are a knowledgeable and friendly Malaysia travel and food guide AI assistant. 
-Help users discover the best places to visit, eat, and experience in Malaysia.
-
-User Query: {query}{location_context}{history_text}{context_text}
-
-Please provide a helpful, accurate, and engaging response about Malaysia's tourism and food scene. 
-Focus on specific recommendations with practical details like location, pricing, and what makes each place special.
-Keep your response conversational and informative, around 150-200 words."""
-
-            # Make prediction request
-            instances = [{"content": prompt}]
-            
-            response = self.vertex_ai_endpoint.predict(instances=instances)
-            
-            if response and response.predictions:
-                return response.predictions[0].get('content', 
-                    "I'd be happy to help you explore Malaysia! Could you please rephrase your question?")
-            else:
-                return "I'd be happy to help you explore Malaysia! Could you please provide more details about what you're looking for?"
+        
+        # Generate query embedding
+        query_embedding = embedding_model.encode(query).tolist()
+        
+        # Search collection
+        results = collection.query(
+            query_embeddings=[query_embedding],
+            n_results=limit
+        )
+        
+        # Format results
+        sources = []
+        if results['documents'] and results['documents'][0]:
+            for i, doc in enumerate(results['documents'][0]):
+                metadata = results['metadatas'][0][i] if results['metadatas'] and results['metadatas'][0] else {}
+                distance = results['distances'][0][i] if results['distances'] and results['distances'][0] else 0
                 
-        except Exception as e:
-            logger.error(f"❌ AI response generation error: {str(e)}")
-            return "I'm currently experiencing technical difficulties. Please try asking your question again."
-    
-    def _analyze_image(self, image_data: str, query: str) -> Optional[Dict[str, Any]]:
-        """Analyze uploaded image (basic implementation)"""
-        try:
-            # Decode base64 image
-            image_bytes = base64.b64decode(image_data.split(',')[1])
-            image = Image.open(BytesIO(image_bytes))
-            
-            # Basic image analysis (can be enhanced with Vision API)
-            return {
-                "size": image.size,
-                "format": image.format,
-                "mode": image.mode,
-                "analysis": "Image uploaded successfully. For detailed food/location analysis, please describe what you see in the image."
-            }
-            
-        except Exception as e:
-            logger.error(f"❌ Image analysis error: {str(e)}")
-            return None
-    
-    def _update_conversation_memory(self, user_id: str, query: str, response: str):
-        """Update conversation memory for context"""
-        if user_id not in self.conversation_memory:
-            self.conversation_memory[user_id] = []
+                sources.append({
+                    "content": doc,
+                    "metadata": metadata,
+                    "relevance_score": 1 - distance  # Convert distance to similarity
+                })
         
-        self.conversation_memory[user_id].append({
-            "query": query,
-            "response": response,
-            "timestamp": datetime.now().isoformat()
-        })
+        return sources
+    except Exception as e:
+        logger.error(f"Knowledge base search failed: {e}")
+        return []
+
+def is_malaysia_travel_related(user_message: str) -> bool:
+    """Check if the user message is related to Malaysia travel"""
+    try:
+        # Convert to lowercase for easier matching
+        message_lower = user_message.lower()
         
-        # Keep only last 10 exchanges per user
-        self.conversation_memory[user_id] = self.conversation_memory[user_id][-10:]
-    
-    def _save_feedback(self, feedback_data: Dict[str, Any]):
-        """Save user feedback to Google Sheets"""
-        try:
-            if not self.google_sheet:
-                logger.warning("Google Sheets not available for feedback")
-                return
+        # Malaysia-related keywords
+        malaysia_keywords = [
+            'malaysia', 'malaysian', 'kuala lumpur', 'kl', 'penang', 'johor', 'sabah', 'sarawak',
+            'langkawi', 'malacca', 'melaka', 'ipoh', 'cameron highlands', 'genting', 'putrajaya',
+            'cyberjaya', 'shah alam', 'petaling jaya', 'klang', 'seremban', 'nilai', 'kedah',
+            'kelantan', 'terengganu', 'pahang', 'perak', 'negeri sembilan', 'selangor',
+            'kuching', 'kota kinabalu', 'sandakan', 'miri', 'sibu', 'bintulu', 'tawau'
+        ]
+        
+        # Travel-related keywords
+        travel_keywords = [
+            'travel', 'trip', 'visit', 'tour', 'tourism', 'vacation', 'holiday', 'destination',
+            'attraction', 'place', 'hotel', 'accommodation', 'restaurant', 'food', 'eat',
+            'culture', 'festival', 'temple', 'mosque', 'beach', 'island', 'mountain', 'park',
+            'shopping', 'mall', 'market', 'transportation', 'flight', 'bus', 'train', 'taxi',
+            'grab', 'weather', 'climate', 'currency', 'ringgit', 'language', 'malay', 'english',
+            'chinese', 'tamil', 'heritage', 'history', 'museum', 'gallery', 'activity',
+            'things to do', 'where to go', 'how to get', 'best time', 'recommendation',
+            'suggest', 'advice', 'guide', 'itinerary', 'budget', 'cost', 'price'
+        ]
+        
+        # Food-related keywords (Malaysian cuisine)
+        food_keywords = [
+            'nasi lemak', 'char kway teow', 'rendang', 'satay', 'laksa', 'roti canai',
+            'bak kut teh', 'cendol', 'durian', 'teh tarik', 'mamak', 'hawker', 'kopitiam',
+            'dim sum', 'curry', 'sambal', 'coconut', 'rice', 'noodles', 'seafood', 'halal'
+        ]
+        
+        # Check if message contains Malaysia-related terms
+        has_malaysia_keyword = any(keyword in message_lower for keyword in malaysia_keywords)
+        
+        # Check if message contains travel-related terms
+        has_travel_keyword = any(keyword in message_lower for keyword in travel_keywords)
+        
+        # Check if message contains food-related terms
+        has_food_keyword = any(keyword in message_lower for keyword in food_keywords)
+        
+        # Message is relevant if it has Malaysia keywords OR (travel/food keywords that could be about Malaysia)
+        if has_malaysia_keyword:
+            return True
+        elif has_travel_keyword or has_food_keyword:
+            # Additional context check - if no Malaysia keyword but has travel/food terms,
+            # we'll be more lenient and let the AI decide with context
+            return True
+        
+        # Common question patterns that might be Malaysia-related even without keywords
+        question_patterns = [
+            'where', 'what', 'how', 'when', 'which', 'recommend', 'suggest', 'best',
+            'good', 'popular', 'famous', 'must visit', 'should i', 'can i', 'is it'
+        ]
+        
+        has_question_pattern = any(pattern in message_lower for pattern in question_patterns)
+        
+        # If it's a question, we'll allow it but the AI will redirect if not Malaysia-related
+        if has_question_pattern:
+            return True
             
-            # Prepare row data
-            row_data = [
-                datetime.now().isoformat(),  # timestamp
-                feedback_data.get('user_query', ''),  # user_query
-                feedback_data.get('ai_response', ''),  # ai_response
-                feedback_data.get('rating', ''),  # rating
-                feedback_data.get('feedback_text', ''),  # feedback_text
-                feedback_data.get('location', '')  # location
-            ]
-            
-            # Append to sheet
-            self.google_sheet.append_row(row_data)
-            logger.info("✅ Feedback saved to Google Sheets")
-            
-        except Exception as e:
-            logger.error(f"❌ Feedback save error: {str(e)}")
-    
-    def run(self, host='0.0.0.0', port=None, debug=False):
-        """Run the Flask application"""
-        if port is None:
-            port = int(os.environ.get('PORT', 5000))
-        logger.info(f"🚀 Starting Malaysia AI Guide API on {host}:{port}")
-        self.app.run(host=host, port=port, debug=debug)
+        return False
+        
+    except Exception as e:
+        logger.error(f"Error checking Malaysia travel relevance: {e}")
+        # If there's an error, be permissive and let the AI handle it
+        return True
 
-# Create application instance
-malaysia_ai = MalaysiaAIGuide()
+def generate_ai_response(user_message: str, context: str, conversation_history: List[str]) -> str:
+    """Generate AI response using available models, restricted to Malaysia travel topics"""
+    try:
+        # Check if the question is related to Malaysia travel
+        if not is_malaysia_travel_related(user_message):
+            return """I'm TourismMalaysiaAI, specifically designed to help with Malaysia travel questions. 
 
-if __name__ == '__main__':
-    # For local development
-    port = int(os.environ.get('PORT', 5000))
-    malaysia_ai.run(debug=True, port=port)
-else:
-    # For production (Gunicorn)
-    app = malaysia_ai.app
+I can assist you with:
+🏛️ Malaysian destinations and attractions
+🍜 Local food and dining recommendations  
+🎭 Cultural experiences and festivals
+🏨 Accommodation and transportation
+🗺️ Travel itineraries and tips
+💰 Budget and cost information
+
+Please ask me anything about traveling in Malaysia! For example:
+- "What are the best places to visit in Kuala Lumpur?"
+- "Where can I find the best nasi lemak?"
+- "What's the weather like in Penang?"
+- "How do I get from KLIA to the city center?"
+
+How can I help you explore Malaysia? 🇲🇾"""
+
+        # Prepare enhanced prompt for TourismMalaysiaAI with strict focus
+        system_prompt = """You are TourismMalaysiaAI, a specialized AI assistant exclusively for Malaysia travel and tourism. 
+
+STRICT GUIDELINES:
+- ONLY answer questions related to Malaysia travel, tourism, destinations, food, culture, and experiences
+- If asked about other countries, politely redirect to Malaysia
+- If asked non-travel questions, redirect to Malaysia travel topics
+- Use the provided context from the knowledge base when available
+- Be enthusiastic, helpful, and knowledgeable about Malaysia
+- Include practical travel tips and local insights
+- Mention specific places, foods, and experiences in Malaysia
+
+ALWAYS stay focused on Malaysia travel topics only."""
+        
+        # Format conversation history
+        history_text = "\n".join(conversation_history[-6:]) if conversation_history else ""
+        
+        prompt = f"""{system_prompt}
+
+Context from Malaysia travel knowledge base:
+{context}
+
+Recent conversation:
+{history_text}
+
+User Question: {user_message}
+
+TourismMalaysiaAI Response (Malaysia travel focused):"""
+
+        # Try your fine-tuned TourismMalaysiaAI model first
+        if vertex_model:
+            try:
+                # Prepare input for your fine-tuned model
+                instances = [{"content": prompt}]
+                
+                # Call your fine-tuned model endpoint
+                response = vertex_model.predict(instances=instances)
+                
+                # Extract the response text
+                if response.predictions and len(response.predictions) > 0:
+                    prediction = response.predictions[0]
+                    if isinstance(prediction, dict) and 'content' in prediction:
+                        ai_response = prediction['content']
+                    elif isinstance(prediction, str):
+                        ai_response = prediction
+                    else:
+                        ai_response = str(prediction)
+                    
+                    # Add Malaysia focus reminder if response seems too general
+                    if ai_response and len(ai_response) > 50:
+                        return ai_response
+                    
+                logger.warning("No valid prediction from fine-tuned model")
+                
+            except Exception as e:
+                logger.warning(f"Fine-tuned TourismMalaysiaAI model failed: {e}")
+        
+        # Try Gemini fallback with Malaysia focus
+        if genai_model:
+            try:
+                response = genai_model.generate_content(prompt)
+                if response.text:
+                    return response.text
+            except Exception as e:
+                logger.warning(f"Gemini fallback failed: {e}")
+        
+        # Fallback response - still Malaysia focused
+        return """I'm TourismMalaysiaAI, your dedicated Malaysia travel guide! 🇲🇾
+
+Even though I'm having technical difficulties right now, I'd love to help you discover Malaysia's amazing destinations:
+
+🏙️ **Cities**: Kuala Lumpur (Petronas Towers, Bukit Bintang), Penang (George Town UNESCO site), Malacca (historic city)
+🏝️ **Islands**: Langkawi (beaches & cable car), Tioman (diving paradise), Redang (crystal waters)
+🍜 **Food**: Nasi lemak, char kway teow, rendang, laksa, satay, roti canai
+🎭 **Culture**: Diverse festivals (Chinese New Year, Hari Raya, Deepavali), temples, mosques
+🌿 **Nature**: Cameron Highlands (tea plantations), Taman Negara (rainforest), Mount Kinabalu
+
+What specific aspect of Malaysia travel interests you most? I'll do my best to help despite the technical issues!"""
+        
+    except Exception as e:
+        logger.error(f"AI response generation failed: {e}")
+        return "I apologize for the technical difficulties. As TourismMalaysiaAI, I'm here to help with your Malaysia travel questions. Please try asking about Malaysian destinations, food, or travel tips, and I'll do my best to assist you! 🇲🇾"
+
+# Initialize all services at startup
+def initialize_services():
+    """Initialize all services"""
+    logger.info("Starting service initialization...")
+    
+    # Initialize components
+    embedding_success = initialize_embedding_model()
+    chromadb_success = initialize_chromadb()
+    vertex_success = initialize_vertex_ai()
+    genai_success = initialize_genai_fallback()
+    sheets_success = initialize_google_sheets()
+    
+    logger.info(f"Service initialization complete:")
+    logger.info(f"  - Embedding model: {'✓' if embedding_success else '✗'}")
+    logger.info(f"  - ChromaDB: {'✓' if chromadb_success else '✗'}")
+    logger.info(f"  - Vertex AI: {'✓' if vertex_success else '✗'}")
+    logger.info(f"  - Gemini fallback: {'✓' if genai_success else '✗'}")
+    logger.info(f"  - Google Sheets: {'✓' if sheets_success else '✗'}")
+
+# API Endpoints
+@app.on_event("startup")
+async def startup_event():
+    """Initialize services when FastAPI starts"""
+    initialize_services()
+
+@app.get("/", response_model=dict)
+async def root():
+    """Root endpoint"""
+    return {
+        "service": "Malaysia AI Travel Guide",
+        "status": "operational",
+        "version": "2.0.0",
+        "description": "Complete RAG-powered travel guide for Malaysia"
+    }
+
+@app.get("/health", response_model=HealthResponse)
+async def health_check():
+    """Health check endpoint"""
+    components = {
+        "embedding_model": "healthy" if embedding_model else "unavailable",
+        "chromadb": "healthy" if collection else "unavailable",
+        "vertex_ai": "healthy" if vertex_model else "unavailable",
+        "genai_fallback": "healthy" if genai_model else "unavailable",
+        "google_sheets": "healthy" if google_sheets_client else "unavailable"
+    }
+    
+    overall_status = "healthy" if any(v == "healthy" for v in [components["vertex_ai"], components["genai_fallback"]]) else "degraded"
+    
+    return HealthResponse(
+        status=overall_status,
+        timestamp=datetime.now().isoformat(),
+        components=components
+    )
+
+@app.get("/api/status", response_model=StatusResponse)
+async def get_status():
+    """Get service status"""
+    return StatusResponse(
+        service="Malaysia AI Travel Guide",
+        status="operational",
+        version="2.0.0",
+        model_status="available" if vertex_model or genai_model else "unavailable",
+        database_status="available" if collection else "unavailable"
+    )
+
+@app.post("/api/chat", response_model=ChatResponse)
+async def chat_endpoint(request: ChatRequest):
+    """Main chat endpoint"""
+    try:
+        user_message = request.message.strip()
+        conversation_id = request.conversation_id or f"conv_{datetime.now().timestamp()}"
+        
+        # Initialize conversation history if needed
+        if conversation_id not in conversation_memory:
+            conversation_memory[conversation_id] = []
+        
+        # Search knowledge base
+        sources = search_knowledge_base(user_message)
+        
+        # Prepare context
+        context = "\n\n".join([source["content"] for source in sources[:3]])
+        
+        # Generate AI response
+        ai_response = generate_ai_response(
+            user_message=user_message,
+            context=context,
+            conversation_history=conversation_memory[conversation_id]
+        )
+        
+        # Update conversation memory
+        conversation_memory[conversation_id].append(f"User: {user_message}")
+        conversation_memory[conversation_id].append(f"AI: {ai_response}")
+        
+        # Keep only last 10 exchanges
+        if len(conversation_memory[conversation_id]) > 20:
+            conversation_memory[conversation_id] = conversation_memory[conversation_id][-20:]
+        
+        return ChatResponse(
+            response=ai_response,
+            conversation_id=conversation_id,
+            sources=sources[:3]
+        )
+        
+    except Exception as e:
+        logger.error(f"Chat endpoint error: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error occurred"
+        )
+
+@app.get("/api/map")
+async def get_map():
+    """Get interactive map HTML"""
+    try:
+        map_html_path = "../malaysia-ai-map/map.html"
+        if os.path.exists(map_html_path):
+            with open(map_html_path, 'r', encoding='utf-8') as f:
+                map_html = f.read()
+            return {"map_html": map_html}
+        else:
+            return {"map_html": "<p>Map not available</p>"}
+    except Exception as e:
+        logger.error(f"Map endpoint error: {e}")
+        return {"map_html": "<p>Error loading map</p>"}
+
+# Additional utility endpoints
+@app.get("/api/destinations")
+async def get_destinations():
+    """Get list of popular destinations"""
+    destinations = [
+        {"name": "Kuala Lumpur", "description": "Malaysia's vibrant capital city"},
+        {"name": "Penang", "description": "UNESCO World Heritage site with amazing food"},
+        {"name": "Malacca", "description": "Historic city with colonial architecture"},
+        {"name": "Langkawi", "description": "Tropical island paradise"},
+        {"name": "Cameron Highlands", "description": "Cool hill station with tea plantations"}
+    ]
+    return {"destinations": destinations}
+
+@app.get("/api/food")
+async def get_popular_foods():
+    """Get list of popular Malaysian foods"""
+    foods = [
+        {"name": "Nasi Lemak", "description": "Malaysia's national dish with coconut rice"},
+        {"name": "Char Kway Teow", "description": "Stir-fried flat rice noodles"},
+        {"name": "Rendang", "description": "Slow-cooked meat in coconut curry"},
+        {"name": "Laksa", "description": "Spicy noodle soup with various regional variations"},
+        {"name": "Satay", "description": "Grilled meat skewers with peanut sauce"}
+    ]
+    return {"foods": foods}
+
+@app.post("/api/check-relevance")
+async def check_relevance(request: ChatRequest):
+    """Test endpoint to check if a question is Malaysia travel related"""
+    try:
+        user_message = request.message.strip()
+        is_relevant = is_malaysia_travel_related(user_message)
+        
+        return {
+            "message": user_message,
+            "is_malaysia_travel_related": is_relevant,
+            "explanation": "This question is about Malaysia travel" if is_relevant else "This question is not about Malaysia travel"
+        }
+    except Exception as e:
+        logger.error(f"Relevance check error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error checking question relevance"
+        )
+
+# Error handlers
+@app.exception_handler(404)
+async def not_found_handler(request, exc):
+    return JSONResponse(
+        status_code=404,
+        content={"error": "Endpoint not found", "message": "The requested endpoint does not exist"}
+    )
+
+@app.exception_handler(500)
+async def internal_error_handler(request, exc):
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error", "message": "An unexpected error occurred"}
+    )
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port) 
