@@ -8,7 +8,6 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching
@@ -17,14 +16,18 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy source code
 COPY . .
 
-# Create necessary directories
+# Create vector_database directory
 RUN mkdir -p vector_database
 
-# Expose port (Cloud Run will set PORT environment variable)
+# Set environment variables
+ENV PYTHONPATH=/app
+ENV PORT=8000
+
+# Expose port
 EXPOSE 8000
 
-# Use Uvicorn to run FastAPI application
-CMD uvicorn api_server:app --host 0.0.0.0 --port $PORT 
+# Use startup script that auto-builds database
+CMD ["python", "startup.py"] 

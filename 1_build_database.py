@@ -41,8 +41,35 @@ def load_tourism_data() -> List[Dict[str, Any]]:
                         if line.strip():
                             data = json.loads(line.strip())
                             
-                            # Extract content from different structures
-                            if 'input_text' in data and 'output_text' in data:
+                            # Handle Vertex AI training data format
+                            if 'contents' in data:
+                                # Extract user question and model response
+                                user_text = ""
+                                model_text = ""
+                                
+                                for content in data['contents']:
+                                    if content.get('role') == 'user':
+                                        for part in content.get('parts', []):
+                                            if 'text' in part:
+                                                user_text = part['text']
+                                    elif content.get('role') == 'model':
+                                        for part in content.get('parts', []):
+                                            if 'text' in part:
+                                                model_text = part['text']
+                                
+                                if user_text and model_text:
+                                    content_text = f"Q: {user_text}\nA: {model_text}"
+                                    documents.append({
+                                        'content': content_text,
+                                        'metadata': {
+                                            'source': 'vertex_ai_training',
+                                            'type': 'qa_pair',
+                                            'line': line_num
+                                        }
+                                    })
+                            
+                            # Handle other formats
+                            elif 'input_text' in data and 'output_text' in data:
                                 content = f"Q: {data['input_text']}\nA: {data['output_text']}"
                                 documents.append({
                                     'content': content,
