@@ -1,242 +1,172 @@
-import pandas as pd
+#!/usr/bin/env python3
+"""
+Malaysia Tourism RAG Database Builder
+Build vector database with tourism data for semantic search
+Compatible with Cloud Run deployment
+"""
+
+import os
 import json
-from sentence_transformers import SentenceTransformer
+import logging
+from pathlib import Path
+from typing import List, Dict, Any
+import pandas as pd
+from tqdm import tqdm
+
+# Import required libraries
 import chromadb
 from chromadb.config import Settings
-from tqdm import tqdm
-import os
-from datetime import datetime
+from sentence_transformers import SentenceTransformer
 
-def load_jsonl_data(file_path):
-    """Load JSONL data with progress tracking"""
-    print(f"Loading data from: {file_path}")
-    
-    # First, count total lines for progress bar
-    with open(file_path, 'r', encoding='utf-8') as f:
-        total_lines = sum(1 for _ in f)
-    
-    print(f"Found {total_lines:,} total entries to process")
-    
-    # Load data with progress bar
-    data = []
-    with open(file_path, 'r', encoding='utf-8') as f:
-        for line in tqdm(f, total=total_lines, desc="Loading JSONL entries"):
-            try:
-                data.append(json.loads(line.strip()))
-            except json.JSONDecodeError as e:
-                print(f"Warning: Skipping invalid JSON line: {e}")
-                continue
-    
-    print(f"Successfully loaded {len(data):,} valid entries")
-    return data
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-def initialize_embedding_model():
-    """Initialize the sentence transformer model"""
-    print("Initializing embedding model (all-MiniLM-L6-v2)...")
+def load_tourism_data() -> List[Dict[str, Any]]:
+    """Load tourism data from JSONL file"""
+    data_files = [
+        "vertex_ai_training_data.jsonl",
+        "../vertex_ai_training_data.jsonl"
+    ]
+    
+    documents = []
+    
+    for file_path in data_files:
+        if os.path.exists(file_path):
+            logger.info(f"Loading data from: {file_path}")
+            
+            with open(file_path, 'r', encoding='utf-8') as f:
+                for line_num, line in enumerate(f, 1):
+                    try:
+                        if line.strip():
+                            data = json.loads(line.strip())
+                            
+                            # Extract content from different structures
+                            if 'input_text' in data and 'output_text' in data:
+                                content = f"Q: {data['input_text']}\nA: {data['output_text']}"
+                                documents.append({
+                                    'content': content,
+                                    'metadata': {
+                                        'source': 'training_data',
+                                        'type': 'qa_pair',
+                                        'line': line_num
+                                    }
+                                })
+                            elif 'content' in data:
+                                documents.append({
+                                    'content': data['content'],
+                                    'metadata': data.get('metadata', {'source': 'training_data', 'line': line_num})
+                                })
+                                
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Skipping invalid JSON at line {line_num}: {e}")
+                        continue
+            
+            logger.info(f"Loaded {len(documents)} documents from {file_path}")
+            break
+    
+    return documents
+
+def build_vector_database():
+    """Build ChromaDB vector database with tourism data"""
+    
+    # Initialize embedding model
+    logger.info("Loading embedding model...")
     model = SentenceTransformer('all-MiniLM-L6-v2')
-    print("Embedding model ready")
-    return model
-
-def initialize_chromadb():
-    """Initialize ChromaDB with persistent storage"""
-    print("Initializing ChromaDB database...")
+    logger.info("Embedding model loaded successfully")
+    
+    # Load tourism data
+    logger.info("Loading tourism data...")
+    documents = load_tourism_data()
+    
+    if not documents:
+        logger.error("No documents loaded! Please check your data files.")
+        return False
+    
+    logger.info(f"Loaded {len(documents)} documents")
     
     # Create database directory
     db_path = "./vector_database"
     os.makedirs(db_path, exist_ok=True)
     
-    # Initialize ChromaDB client
+    # Initialize ChromaDB with compatible settings
+    logger.info("Initializing ChromaDB...")
     client = chromadb.PersistentClient(
         path=db_path,
-        settings=Settings(anonymized_telemetry=False)
+        settings=Settings(
+            anonymized_telemetry=False,
+            allow_reset=True
+        )
     )
     
-    # Create or get collection
-    collection_name = "malaysia_travel_guide"
+    # Delete existing collection if it exists
     try:
-        # Try to delete existing collection to start fresh
-        client.delete_collection(collection_name)
-        print(f"Removed existing collection: {collection_name}")
+        client.delete_collection("malaysia_travel_guide")
+        logger.info("Deleted existing collection")
     except:
-        pass  # Collection doesn't exist, which is fine
+        pass
     
+    # Create new collection with simple metadata
     collection = client.create_collection(
-        name=collection_name,
-        metadata={"description": "Complete Malaysia Tourism Dataset"}
+        name="malaysia_travel_guide",
+        metadata={"hnsw:space": "cosine"}
     )
     
-    print(f"Created fresh collection: {collection_name}")
-    return client, collection
-
-def extract_text_content(item):
-    """Extract text content from JSONL item based on common field patterns"""
-    # Try different common field names for text content
-    text_fields = ['content', 'text', 'description', 'message', 'body', 'input', 'output']
+    # Process documents in batches
+    batch_size = 100
+    total_batches = (len(documents) + batch_size - 1) // batch_size
     
-    for field in text_fields:
-        if field in item and item[field]:
-            return str(item[field])
+    logger.info(f"Processing {len(documents)} documents in {total_batches} batches...")
     
-    # If no standard field found, try to combine all string values
-    text_parts = []
-    for key, value in item.items():
-        if isinstance(value, str) and value.strip():
-            text_parts.append(value)
-        elif isinstance(value, (dict, list)):
-            # Handle nested structures
-            text_parts.append(str(value))
-    
-    return " ".join(text_parts) if text_parts else ""
-
-def process_and_index_data(data, embedding_model, collection):
-    """Process all data and create vector embeddings"""
-    print(f"\nStarting to process and index {len(data):,} entries...")
-    print("This will take a few minutes - every single entry is being processed!")
-    
-    batch_size = 100  # Process in batches for memory efficiency
-    total_processed = 0
-    skipped_empty = 0
-    
-    for i in tqdm(range(0, len(data), batch_size), desc="Processing batches"):
-        batch = data[i:i + batch_size]
+    for batch_num in tqdm(range(total_batches), desc="Building database"):
+        start_idx = batch_num * batch_size
+        end_idx = min((batch_num + 1) * batch_size, len(documents))
+        batch_docs = documents[start_idx:end_idx]
         
         # Prepare batch data
-        batch_texts = []
-        batch_ids = []
-        batch_metadata = []
+        batch_texts = [doc['content'] for doc in batch_docs]
+        batch_ids = [f"doc_{start_idx + i}" for i in range(len(batch_docs))]
+        batch_metadata = [doc['metadata'] for doc in batch_docs]
         
-        for j, item in enumerate(batch):
-            # Create unique ID
-            doc_id = f"doc_{i + j + 1:06d}"
-            
-            # Extract text content
-            text_content = extract_text_content(item)
-            
-            # Skip empty content
-            if not text_content.strip():
-                skipped_empty += 1
-                continue
-                
-            batch_texts.append(text_content)
-            batch_ids.append(doc_id)
-            
-            # Prepare metadata (store original data)
-            metadata = {
-                "source": "malaysia_tourism_dataset",
-                "batch_index": i + j,
-                "processed_at": datetime.now().isoformat(),
-                "doc_length": len(text_content)
-            }
-            
-            # Add key fields from original data as metadata
-            for key, value in item.items():
-                if key in ['role', 'category', 'type', 'id', 'location', 'price', 'rating']:
-                    metadata[f"original_{key}"] = str(value)[:200]  # Limit length
-            
-            batch_metadata.append(metadata)
+        # Generate embeddings
+        embeddings = model.encode(batch_texts).tolist()
         
-        # Generate embeddings for this batch
-        if batch_texts:
-            try:
-                embeddings = embedding_model.encode(batch_texts, show_progress_bar=False)
-                
-                # Add to ChromaDB
-                collection.add(
-                    embeddings=embeddings.tolist(),
-                    documents=batch_texts,
-                    metadatas=batch_metadata,
-                    ids=batch_ids
-                )
-                
-                total_processed += len(batch_texts)
-            except Exception as e:
-                print(f"Error processing batch {i}: {e}")
-                continue
+        # Add to collection
+        collection.add(
+            documents=batch_texts,
+            embeddings=embeddings,
+            metadatas=batch_metadata,
+            ids=batch_ids
+        )
+        
+        if batch_num % 10 == 0:
+            logger.info(f"Processed batch {batch_num + 1}/{total_batches}")
     
-    if skipped_empty > 0:
-        print(f"Skipped {skipped_empty} empty entries")
+    # Verify database
+    total_count = collection.count()
+    logger.info(f"Database built successfully!")
+    logger.info(f"Total documents: {total_count:,}")
     
-    return total_processed
-
-def verify_database(collection):
-    """Verify the database was built correctly"""
-    print("\nVerifying database...")
+    # Test query
+    logger.info("Testing database...")
+    test_results = collection.query(
+        query_texts=["What are popular attractions in Malaysia?"],
+        n_results=3
+    )
+    logger.info(f"Test query returned {len(test_results['documents'][0])} results")
     
-    try:
-        # Get total count
-        db_count = collection.count()
-        
-        # Test a sample query
-        if db_count > 0:
-            sample_results = collection.query(
-                query_texts=["Malaysia tourism attractions"],
-                n_results=3
-            )
-            
-            print(f"Database verification successful!")
-            print(f"Sample query returned {len(sample_results['documents'][0])} results")
-        
-        return db_count
-        
-    except Exception as e:
-        print(f"Database verification failed: {e}")
-        return 0
-
-def main():
-    """Main function to build the complete vector database"""
-    print("Malaysia Tourism RAG Database Builder")
-    print("=" * 60)
-    
-    # Configuration
-    jsonl_file_path = "vertex_ai_training_data.jsonl"  # Adjust this path as needed
-    
-    # Check if file exists
-    if not os.path.exists(jsonl_file_path):
-        print(f"Error: File not found: {jsonl_file_path}")
-        print("Please make sure your JSONL file is in the current directory")
-        print("Available files:")
-        for f in os.listdir("."):
-            if f.endswith(('.jsonl', '.json')):
-                print(f"  - {f}")
-        return
-    
-    try:
-        # Step 1: Load all data
-        data = load_jsonl_data(jsonl_file_path)
-        
-        if not data:
-            print("Error: No valid data found in the file")
-            return
-        
-        # Step 2: Initialize embedding model
-        embedding_model = initialize_embedding_model()
-        
-        # Step 3: Initialize ChromaDB
-        client, collection = initialize_chromadb()
-        
-        # Step 4: Process and index ALL data
-        total_indexed = process_and_index_data(data, embedding_model, collection)
-        
-        # Step 5: Verify the database
-        db_count = verify_database(collection)
-        
-        # Final results
-        print("\n" + "=" * 60)
-        print("DATABASE BUILD COMPLETE!")
-        print("=" * 60)
-        print(f"SUCCESS! Indexed a total of {total_indexed:,} documents")
-        print(f"Database contains {db_count:,} searchable entries")
-        print(f"Database location: ./vector_database")
-        print(f"Collection name: malaysia_travel_guide")
-        print(f"Original dataset size: {len(data):,} entries")
-        print(f"Processing efficiency: {(total_indexed/len(data)*100):.1f}%")
-        print("\nYour ENTIRE 40MB+ dataset is now efficiently searchable!")
-        print("Ready to proceed to Step 2: API Server")
-        
-    except Exception as e:
-        print(f"Error during database building: {e}")
-        import traceback
-        traceback.print_exc()
+    return True
 
 if __name__ == "__main__":
-    main() 
+    logger.info("=" * 50)
+    logger.info("Malaysia Tourism RAG Database Builder")
+    logger.info("=" * 50)
+    
+    success = build_vector_database()
+    
+    if success:
+        logger.info("✅ Database build completed successfully!")
+        logger.info("🚀 Ready for deployment!")
+    else:
+        logger.error("❌ Database build failed!")
+        exit(1) 
