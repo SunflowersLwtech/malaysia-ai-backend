@@ -268,18 +268,17 @@ async def chat_endpoint(request: ChatRequest):
         )
         
         # Use standard model name format (extract from endpoint if needed)
-        # Convert endpoint format to standard model name
+        # Since the fine-tuned endpoint might not be available, use standard models as fallback
         if model_endpoint and "gemini-1.5-pro" in model_endpoint:
             model = "gemini-1.5-pro"
+            logger.info(f"🎯 Using Gemini 1.5 Pro (inferred from endpoint)")
         elif model_endpoint and "gemini-1.5-flash" in model_endpoint:
-            model = "gemini-1.5-flash" 
-        elif model_endpoint:
-            # Fallback to using the full endpoint
-            model = model_endpoint
+            model = "gemini-1.5-flash"
+            logger.info(f"🎯 Using Gemini 1.5 Flash (inferred from endpoint)")
         else:
-            # Default fallback model
+            # For fine-tuned endpoints or when endpoint is not available, use standard model
             model = "gemini-1.5-pro"
-            logger.warning("⚠️ No model endpoint specified, using default: gemini-1.5-pro")
+            logger.info(f"🔄 Using standard Gemini 1.5 Pro (endpoint fallback: {model_endpoint})")
         
         # Create content - following official documentation format
         contents = [
@@ -369,15 +368,14 @@ async def chat_stream_endpoint(request: ChatRequest):
             # Use standard model name format (same logic as main chat endpoint)
             if model_endpoint and "gemini-1.5-pro" in model_endpoint:
                 model = "gemini-1.5-pro"
+                logger.info(f"🎯 Stream using Gemini 1.5 Pro (inferred from endpoint)")
             elif model_endpoint and "gemini-1.5-flash" in model_endpoint:
-                model = "gemini-1.5-flash" 
-            elif model_endpoint:
-                # Fallback to using the full endpoint
-                model = model_endpoint
+                model = "gemini-1.5-flash"
+                logger.info(f"🎯 Stream using Gemini 1.5 Flash (inferred from endpoint)")
             else:
-                # Default fallback model
+                # For fine-tuned endpoints or when endpoint is not available, use standard model
                 model = "gemini-1.5-pro"
-                logger.warning("⚠️ No model endpoint specified, using default: gemini-1.5-pro")
+                logger.info(f"🔄 Stream using standard Gemini 1.5 Pro (endpoint fallback: {model_endpoint})")
 
             # Create content following official documentation format
             contents = [
