@@ -17,14 +17,25 @@ services:
     healthCheckPath: /health
     autoDeploy: true
     
-  # Frontend Streamlit Service (separate deployment recommended)
+  # Frontend Streamlit Service (Docker deployment for better reliability)
   - type: web
     name: malaysia-ai-frontend
-    env: python
-    buildCommand: pip install -r streamlit_requirements.txt
-    startCommand: streamlit run streamlit_app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true --server.enableCORS false
+    env: docker
+    dockerfilePath: ./Dockerfile
     envVars:
       - key: API_BASE_URL
         value: https://malaysia-ai-backend.onrender.com
-    healthCheckPath: /healthz
-    autoDeploy: true 
+      - key: PORT
+        value: 8501
+    autoDeploy: true
+    
+  # Alternative: Python deployment (if Docker fails)
+  # - type: web
+  #   name: malaysia-ai-frontend-python
+  #   env: python
+  #   buildCommand: pip install -r requirements.txt
+  #   startCommand: streamlit run streamlit_app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true --server.enableCORS false
+  #   envVars:
+  #     - key: API_BASE_URL
+  #       value: https://malaysia-ai-backend.onrender.com
+  #   autoDeploy: true 
