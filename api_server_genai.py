@@ -81,6 +81,15 @@ def setup_google_credentials():
     """Setup Google Cloud credentials for different environments"""
     global credentials
     try:
+        # Define the required scopes for Vertex AI
+        VERTEX_AI_SCOPES = [
+            'https://www.googleapis.com/auth/cloud-platform',
+            'https://www.googleapis.com/auth/cloud-platform.read-only',
+            'https://www.googleapis.com/auth/devstorage.full_control',
+            'https://www.googleapis.com/auth/devstorage.read_only',
+            'https://www.googleapis.com/auth/devstorage.read_write'
+        ]
+        
         # Check if we're in Render environment
         if os.getenv("RENDER_SERVICE_NAME"):
             logger.info("🌐 Running on Render - setting up cloud credentials")
@@ -97,8 +106,13 @@ def setup_google_credentials():
             for secret_file_path in possible_paths:
                 if os.path.exists(secret_file_path):
                     try:
-                        credentials = service_account.Credentials.from_service_account_file(secret_file_path)
+                        # Load credentials with proper scopes
+                        credentials = service_account.Credentials.from_service_account_file(
+                            secret_file_path,
+                            scopes=VERTEX_AI_SCOPES
+                        )
                         logger.info(f"🔐 Service account credentials loaded from: {secret_file_path}")
+                        logger.info(f"🔧 Applied scopes: {len(VERTEX_AI_SCOPES)} vertex AI scopes")
                         credentials_loaded = True
                         break
                     except Exception as e:
@@ -106,11 +120,12 @@ def setup_google_credentials():
                         continue
             
             if not credentials_loaded:
-                # Fallback: Use default credentials (Application Default Credentials)
+                # Fallback: Use default credentials with scopes
                 logger.info("🔄 Using Application Default Credentials as fallback")
                 try:
-                    credentials = None  # Let genai.Client use default credentials
-                    logger.info("🔐 Using default application credentials")
+                    from google.auth import default
+                    credentials, _ = default(scopes=VERTEX_AI_SCOPES)
+                    logger.info("🔐 Using default application credentials with proper scopes")
                     return True
                 except Exception as e:
                     logger.error(f"❌ Failed to use default credentials: {e}")
@@ -123,15 +138,23 @@ def setup_google_credentials():
             logger.info("🏠 Running in local environment")
             cred_file = "bright-coyote-463315-q8-59797318b374.json"
             if os.path.exists(cred_file):
-                credentials = service_account.Credentials.from_service_account_file(cred_file)
-                logger.info(f"🔐 Using local credentials: {cred_file}")
+                credentials = service_account.Credentials.from_service_account_file(
+                    cred_file,
+                    scopes=VERTEX_AI_SCOPES
+                )
+                logger.info(f"🔐 Using local credentials with scopes: {cred_file}")
                 return True
             else:
                 logger.warning(f"⚠️ Local credential file not found: {cred_file}")
                 # Try default credentials
-                credentials = None
-                logger.info("🔄 Using default application credentials")
-                return True
+                try:
+                    from google.auth import default
+                    credentials, _ = default(scopes=VERTEX_AI_SCOPES)
+                    logger.info("🔄 Using default application credentials with proper scopes")
+                    return True
+                except Exception as e:
+                    logger.error(f"❌ Failed to use default credentials: {e}")
+                    return False
                 
     except Exception as e:
         logger.error(f"❌ Failed to setup credentials: {e}")
