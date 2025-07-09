@@ -190,10 +190,17 @@ async def chat_endpoint(request: ChatRequest):
             credentials=credentials
         )
         
-        # Use endpoint path as model name
-        model = model_endpoint
+        # Use standard model name format (extract from endpoint if needed)
+        # Convert endpoint format to standard model name
+        if "gemini-1.5-pro" in model_endpoint:
+            model = "gemini-1.5-pro"
+        elif "gemini-1.5-flash" in model_endpoint:
+            model = "gemini-1.5-flash" 
+        else:
+            # Fallback to using the full endpoint
+            model = model_endpoint
         
-        # Create content - following successful test script format exactly
+        # Create content - following official documentation format
         contents = [
             types.Content(
                 role="user",
@@ -203,36 +210,36 @@ async def chat_endpoint(request: ChatRequest):
             ),
         ]
         
-        # Enhanced generation config to match Google Cloud Console settings
+        # Enhanced generation config following official documentation
         generate_content_config = types.GenerateContentConfig(
             temperature=request.temperature,
             top_p=0.95,  # More conservative for better quality
-            top_k=40,    # Add top_k for better control
             max_output_tokens=request.max_tokens,
+            # Use proper safety settings format per documentation
             safety_settings=[
                 types.SafetySetting(
                     category="HARM_CATEGORY_HATE_SPEECH",
-                    threshold="OFF"
+                    threshold="BLOCK_NONE"
                 ),
                 types.SafetySetting(
-                    category="HARM_CATEGORY_DANGEROUS_CONTENT",
-                    threshold="OFF"
+                    category="HARM_CATEGORY_DANGEROUS_CONTENT", 
+                    threshold="BLOCK_NONE"
                 ),
                 types.SafetySetting(
                     category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                    threshold="OFF"
+                    threshold="BLOCK_NONE"
                 ),
                 types.SafetySetting(
                     category="HARM_CATEGORY_HARASSMENT",
-                    threshold="OFF"
+                    threshold="BLOCK_NONE"
                 )
             ],
         )
         
-        logger.info(f"🚀 Calling fine-tuned model: {model}")
-        logger.info(f"🔧 Config: temp={request.temperature}, max_tokens={request.max_tokens}, top_p=0.95, top_k=40")
+        logger.info(f"🚀 Calling model: {model}")
+        logger.info(f"🔧 Config: temp={request.temperature}, max_tokens={request.max_tokens}, top_p=0.95")
         
-        # Call model - following successful test script format exactly
+        # Call model using streaming approach for better performance
         response_text = ""
         chunk_count = 0
         for chunk in client.models.generate_content_stream(
@@ -252,7 +259,7 @@ async def chat_endpoint(request: ChatRequest):
         
         return ChatResponse(
             response=cleaned_response,
-            model_used=f"vertex-ai-endpoint-{model_endpoint.split('/')[-1]}"
+            model_used=f"vertex-ai-{model}"
         )
         
     except Exception as e:
@@ -278,34 +285,60 @@ async def chat_stream_endpoint(request: ChatRequest):
                 credentials=credentials
             )
 
-            # Use endpoint path as model name
-            model = model_endpoint
+            # Use standard model name format (same logic as main chat endpoint)
+            if "gemini-1.5-pro" in model_endpoint:
+                model = "gemini-1.5-pro"
+            elif "gemini-1.5-flash" in model_endpoint:
+                model = "gemini-1.5-flash" 
+            else:
+                # Fallback to using the full endpoint
+                model = model_endpoint
 
-            # Create content
+            # Create content following official documentation format
             contents = [
                 types.Content(
                     role="user",
-                    parts=[types.Part(text=request.message)]
+                    parts=[types.Part.from_text(text=request.message)]
                 )
             ]
             
-            # Generation config
-            generation_config = types.GenerationConfig(
+            # Generation config following official documentation
+            generation_config = types.GenerateContentConfig(
                 max_output_tokens=request.max_tokens,
                 temperature=request.temperature,
+                top_p=0.95,
+                safety_settings=[
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_HATE_SPEECH",
+                        threshold="BLOCK_NONE"
+                    ),
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_DANGEROUS_CONTENT", 
+                        threshold="BLOCK_NONE"
+                    ),
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                        threshold="BLOCK_NONE"
+                    ),
+                    types.SafetySetting(
+                        category="HARM_CATEGORY_HARASSMENT",
+                        threshold="BLOCK_NONE"
+                    )
+                ]
             )
 
+            logger.info(f"🚀 Starting stream for model: {model}")
+
             # Send request and get streaming response
-            responses = client.generate_content(
+            responses = client.models.generate_content_stream(
                 model=model,
                 contents=contents,
-                generation_config=generation_config,
-                stream=True,
+                config=generation_config,
             )
             
             # Yield each chunk
             for chunk in responses:
-                if chunk.parts:
+                if chunk.text:
                     cleaned_chunk = clean_response_text(chunk.text)
                     if cleaned_chunk:
                         yield f"data: {json.dumps({'response': cleaned_chunk})}\n\n"
