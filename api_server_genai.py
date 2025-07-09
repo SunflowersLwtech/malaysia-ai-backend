@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+import tempfile
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -29,8 +30,8 @@ except ImportError as e:
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="AI Chat Backend - Gen AI SDK",
-    description="FastAPI backend using Google Gen AI SDK for fine-tuned Vertex AI models",
+    title="🇲🇾 Malaysia Tourism AI Backend",
+    description="Advanced AI Chat Backend using Google Gen AI SDK with fine-tuned Gemini model",
     version="2.0.0"
 )
 
@@ -55,23 +56,61 @@ class ChatResponse(BaseModel):
 
 # Minimal text cleaning function to preserve content quality
 def clean_response_text(text: str) -> str:
-    """Minimal cleaning to preserve AI response quality"""
+    """Clean up the response text"""
     if not text:
-        return text
+        return ""
     
-    # Only remove leading/trailing whitespace and normalize line endings
-    cleaned = text.strip()
+    # Remove excessive newlines and clean up formatting
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        line = line.strip()
+        if line:
+            cleaned_lines.append(line)
     
-    # Normalize line endings but preserve formatting
-    cleaned = cleaned.replace('\r\n', '\n').replace('\r', '\n')
-    
-    return cleaned
+    return '\n'.join(cleaned_lines)
 
 # Global variables
-client = None
-model_endpoint = None
 project_id = None
 location = None
+model_endpoint = None
+
+def setup_google_credentials():
+    """Setup Google Cloud credentials for different environments"""
+    try:
+        # Check if we're in Render environment
+        if os.getenv("RENDER_SERVICE_NAME"):
+            logger.info("🌐 Running on Render - setting up cloud credentials")
+            
+            # Get service account credentials from environment variable
+            service_account_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
+            if service_account_json:
+                # Create temporary file with service account credentials
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                    f.write(service_account_json)
+                    temp_cred_file = f.name
+                
+                # Set environment variable to point to temp file
+                os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = temp_cred_file
+                logger.info("🔐 Service account credentials configured from environment")
+                return True
+            else:
+                logger.warning("⚠️ GOOGLE_SERVICE_ACCOUNT_JSON not found in environment")
+                return False
+        else:
+            # Local development - use existing file
+            cred_file = "bright-coyote-463315-q8-59797318b374.json"
+            if os.path.exists(cred_file):
+                os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = cred_file
+                logger.info(f"🔐 Using local credentials: {cred_file}")
+                return True
+            else:
+                logger.warning(f"⚠️ Local credential file not found: {cred_file}")
+                return False
+                
+    except Exception as e:
+        logger.error(f"❌ Failed to setup credentials: {e}")
+        return False
 
 @app.on_event("startup")
 async def startup_event():
@@ -81,6 +120,10 @@ async def startup_event():
     logger.info("🚀 Starting AI Chat Backend with Google Gen AI SDK...")
     
     try:
+        # Setup credentials first
+        if not setup_google_credentials():
+            raise ValueError("Failed to setup Google Cloud credentials")
+        
         # Get configuration from environment variables (set in Render)
         project_id = os.getenv("GOOGLE_CLOUD_PROJECT", "bright-coyote-463315-q8")
         location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-west1")
@@ -97,9 +140,8 @@ async def startup_event():
         render_service = os.getenv("RENDER_SERVICE_NAME")
         if render_service:
             logger.info(f"🌐 Running on Render service: {render_service}")
-            logger.info("🔐 Using Render environment credentials")
         else:
-            logger.info("🔐 Using local development credentials")
+            logger.info("🔐 Running in local development environment")
         
         # Test client creation
         test_client = genai.Client(
