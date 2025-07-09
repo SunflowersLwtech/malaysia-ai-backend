@@ -268,53 +268,54 @@ async def chat_stream_endpoint(request: ChatRequest):
     """Streaming chat endpoint using Google Gen AI SDK"""
     logger.info(f"📨 Received streaming chat request: {request.message[:50]}...")
     
-    try:
-        # Create client - pass credentials object explicitly
-        client = genai.Client(
-            vertexai=True,
-            project=project_id,
-            location=location,
-            credentials=credentials
-        )
-
-        # Use endpoint path as model name
-        model = model_endpoint
-
-        # Create content
-        contents = [
-            types.Content(
-                role="user",
-                parts=[types.Part(text=request.message)]
+    async def generate():
+        try:
+            # Create client - pass credentials object explicitly
+            client = genai.Client(
+                vertexai=True,
+                project=project_id,
+                location=location,
+                credentials=credentials
             )
-        ]
-        
-        # Generation config
-        generation_config = types.GenerationConfig(
-            max_output_tokens=request.max_tokens,
-            temperature=request.temperature,
-        )
 
-        # Send request and get streaming response
-        responses = client.generate_content(
-            model=model,
-            contents=contents,
-            generation_config=generation_config,
-            stream=True,
-        )
-        
-        # Yield each chunk
-        for chunk in responses:
-            if chunk.parts:
-                cleaned_chunk = clean_response_text(chunk.text)
-                if cleaned_chunk:
-                    yield f"data: {json.dumps({'response': cleaned_chunk})}\n\n"
-                            
-        yield f"data: {json.dumps({'done': True})}\n\n"
+            # Use endpoint path as model name
+            model = model_endpoint
 
-    except Exception as e:
-        error_message = f"❌ Streaming error: {str(e)}"
-        logger.error(error_message)
-        yield f"data: {json.dumps({'error': error_message})}\n\n"
+            # Create content
+            contents = [
+                types.Content(
+                    role="user",
+                    parts=[types.Part(text=request.message)]
+                )
+            ]
+            
+            # Generation config
+            generation_config = types.GenerationConfig(
+                max_output_tokens=request.max_tokens,
+                temperature=request.temperature,
+            )
+
+            # Send request and get streaming response
+            responses = client.generate_content(
+                model=model,
+                contents=contents,
+                generation_config=generation_config,
+                stream=True,
+            )
+            
+            # Yield each chunk
+            for chunk in responses:
+                if chunk.parts:
+                    cleaned_chunk = clean_response_text(chunk.text)
+                    if cleaned_chunk:
+                        yield f"data: {json.dumps({'response': cleaned_chunk})}\n\n"
+                                
+            yield f"data: {json.dumps({'done': True})}\n\n"
+
+        except Exception as e:
+            error_message = f"❌ Streaming error: {str(e)}"
+            logger.error(error_message)
+            yield f"data: {json.dumps({'error': error_message})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
