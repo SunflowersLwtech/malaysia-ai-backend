@@ -1,134 +1,62 @@
-# 🚀 Malaysia Tourism AI - Quick Render Deployment Fix
+# 🚀 Quick Render Deployment Guide - Malaysia Tourism AI
 
-## 🚨 **Current Issues Fixed:**
+## ⚡ **URGENT FIX: Authentication Error**
 
-1. ✅ **Fixed Dockerfile** - Correct start command
-2. ✅ **Fixed render.yaml** - Proper Docker configuration  
-3. ✅ **Fixed API Server** - Removed .env dependency
-4. ✅ **Fixed Environment Variables** - Cloud-native configuration
+If you're seeing **"Your default credentials were not found"** error, follow these steps:
 
-## 🔧 **Immediate Render Deployment Steps:**
+### 🔧 **Immediate Fix Steps:**
 
-### **Step 1: Update Your Render Service**
+#### 1. **📋 MANUALLY Add Environment Variable in Render Dashboard**
 
-In your Render dashboard for `malaysia-ai-backend`:
+**🔐 SECURITY NOTE:** For security reasons, the Google credentials CANNOT be stored in code files. You must add this manually in Render.
 
-1. **Build & Deploy Settings:**
-   ```
-   Environment: Docker
-   Dockerfile Path: ./Dockerfile
-   Build Command: (leave empty - Docker handles this)
-   Start Command: (leave empty - Docker handles this)
-   ```
+**Go to Render Dashboard → malaysia-ai-backend service → Environment → Add Environment Variable:**
 
-2. **Environment Variables:**
-   ```bash
-   GOOGLE_CLOUD_PROJECT=bright-coyote-463315-q8
-   GOOGLE_CLOUD_LOCATION=us-west1
-   VERTEX_AI_ENDPOINT=projects/bright-coyote-463315-q8/locations/us-west1/endpoints/6528596580524621824
-   PORT=8000
-   ```
+**Variable Name:** `GOOGLE_SERVICE_ACCOUNT_JSON`
 
-3. **Health Check Path:**
-   ```
-   /health
-   ```
+**Variable Value:** 
+```
+Copy the complete JSON content from your local file:
+bright-coyote-463315-q8-59797318b374.json
 
-### **Step 2: Authentication Setup**
-
-**Option A: Service Account Key (Recommended for Render)**
-
-1. **Upload Service Account Key as Secret File:**
-   - In Render dashboard → your service → "Secret Files"
-   - Upload file: `bright-coyote-463315-q8-59797318b374.json`
-   - Mount path: `/etc/secrets/credentials.json`
-
-2. **Add Environment Variable:**
-   ```
-   GOOGLE_APPLICATION_CREDENTIALS=/etc/secrets/credentials.json
-   ```
-
-**Option B: Use Application Default Credentials**
-- Just deploy without the credentials file
-- Render will use default authentication
-
-### **Step 3: Deploy Backend**
-
-1. **Manual Deploy:**
-   - Go to your Render service
-   - Click "Manual Deploy" → "Deploy latest commit"
-
-2. **Check Logs:**
-   - Monitor deployment logs for:
-   ```
-   ✅ Google Gen AI client initialized successfully
-   ✅ Backend initialization complete
-   ```
-
-### **Step 4: Test Backend**
-
-Once deployed, test your backend:
-
-```bash
-# Health check
-curl https://your-backend-url.onrender.com/health
-
-# Test chat (replace with your actual URL)
-curl -X POST https://your-backend-url.onrender.com/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "Tell me about Kuala Lumpur attractions"}'
+⚠️ IMPORTANT: This JSON contains private keys - never store in code!
 ```
 
-### **Step 5: Deploy Frontend**
+#### 2. **✅ Required Environment Variables:**
+```bash
+GOOGLE_CLOUD_PROJECT=bright-coyote-463315-q8
+GOOGLE_CLOUD_LOCATION=us-west1  
+VERTEX_AI_ENDPOINT=projects/bright-coyote-463315-q8/locations/us-west1/endpoints/6528596580524621824
+GOOGLE_SERVICE_ACCOUNT_JSON=[Your complete service account JSON - add manually in Render]
+```
 
-Create a **separate service** for the frontend:
+#### 3. **🔄 Restart Service:**
+After adding the environment variable:
+1. Go to Render Dashboard
+2. Click "Manual Deploy" or wait for auto-deploy
+3. Check logs for successful authentication
 
-1. **New Web Service:**
-   ```
-   Repository: malaysia-ai-frontend
-   Environment: Python 3
-   Build Command: pip install -r streamlit_requirements.txt
-   Start Command: streamlit run streamlit_app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true
-   ```
+### 📊 **Expected Success Logs:**
+```bash
+✅ Google Gen AI client initialized successfully
+✅ Using fine-tuned model endpoint: projects/bright-coyote-463315-q8/locations/us-west1/endpoints/6528596580524621824
+✅ Backend initialization complete
+```
 
-2. **Environment Variables:**
-   ```
-   API_BASE_URL=https://your-backend-service.onrender.com
-   ```
+### 🌍 **Access URLs:**
+- **Backend API:** https://malaysia-ai-backend.onrender.com
+- **Frontend UI:** https://malaysia-ai-frontend.onrender.com
+- **Health Check:** https://malaysia-ai-backend.onrender.com/health
 
-## 🎯 **Expected Results:**
+### 🔍 **Troubleshooting:**
+1. **JWT Signature Error:** Ensure service account JSON is correct
+2. **Missing Variables:** Check all environment variables are set
+3. **Cold Start:** First request after sleep may take 10-30 seconds
 
-After successful deployment:
+## 🎯 **Testing:**
+Once deployed, test with Malaysia tourism questions:
+- "Tell me about Kuala Lumpur attractions"
+- "Best food in Malaysia"
+- "Places to visit in Penang"
 
-- **Backend URL:** `https://malaysia-ai-backend-xxx.onrender.com`
-- **Frontend URL:** `https://malaysia-ai-frontend-xxx.onrender.com`
-- **Health Check:** Should return `{"status": "healthy"}`
-- **Chat API:** Should respond with Malaysia tourism information
-
-## 🚨 **Troubleshooting:**
-
-### **If you see "startup.py" error:**
-- This is now fixed in the updated Dockerfile
-
-### **If you see authentication errors:**
-- Upload your service account key as a secret file
-- Make sure `GOOGLE_APPLICATION_CREDENTIALS` points to the correct path
-
-### **If the model doesn't respond:**
-- Check that all environment variables are set correctly
-- Monitor logs for "✅ Google Gen AI client initialized successfully"
-
-## 📞 **Next Steps:**
-
-1. **Update GitHub** (if not done):
-   ```bash
-   git add .
-   git commit -m "Fix Render deployment configuration"
-   git push origin main
-   ```
-
-2. **Deploy to Render** using the steps above
-
-3. **Test both services** work together
-
-Your Malaysia Tourism AI should now deploy successfully to Render! 🇲🇾✨ 
+**🎉 Your Malaysia Tourism AI is now live on the cloud!** 
