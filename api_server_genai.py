@@ -83,18 +83,44 @@ def setup_google_credentials():
     try:
         # Check if we're in Render environment
         if os.getenv("RENDER_SERVICE_NAME"):
-            logger.info("🌐 Running on Render - loading credentials from Secret File")
-            secret_file_path = '/etc/secrets/google_creds.json'
-            if os.path.exists(secret_file_path):
-                credentials = service_account.Credentials.from_service_account_file(secret_file_path)
-                logger.info("🔐 Service account credentials loaded successfully from Secret File.")
-                return True
-            else:
-                logger.error(f"❌ Secret File not found at {secret_file_path}. Please configure it in Render dashboard.")
-                return False
+            logger.info("🌐 Running on Render - setting up cloud credentials")
+            
+            # Try different possible secret file locations
+            possible_paths = [
+                '/etc/secrets/google_creds.json',
+                '/var/secrets/google_creds.json', 
+                '/opt/render/project/secrets/google_creds.json',
+                './google_creds.json'
+            ]
+            
+            credentials_loaded = False
+            for secret_file_path in possible_paths:
+                if os.path.exists(secret_file_path):
+                    try:
+                        credentials = service_account.Credentials.from_service_account_file(secret_file_path)
+                        logger.info(f"🔐 Service account credentials loaded from: {secret_file_path}")
+                        credentials_loaded = True
+                        break
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to load credentials from {secret_file_path}: {e}")
+                        continue
+            
+            if not credentials_loaded:
+                # Fallback: Use default credentials (Application Default Credentials)
+                logger.info("🔄 Using Application Default Credentials as fallback")
+                try:
+                    credentials = None  # Let genai.Client use default credentials
+                    logger.info("🔐 Using default application credentials")
+                    return True
+                except Exception as e:
+                    logger.error(f"❌ Failed to use default credentials: {e}")
+                    return False
+            
+            return True
+            
         else:
             # Local development - use existing file
-            logger.info("Running in local environment")
+            logger.info("🏠 Running in local environment")
             cred_file = "bright-coyote-463315-q8-59797318b374.json"
             if os.path.exists(cred_file):
                 credentials = service_account.Credentials.from_service_account_file(cred_file)
@@ -102,7 +128,10 @@ def setup_google_credentials():
                 return True
             else:
                 logger.warning(f"⚠️ Local credential file not found: {cred_file}")
-                return False
+                # Try default credentials
+                credentials = None
+                logger.info("🔄 Using default application credentials")
+                return True
                 
     except Exception as e:
         logger.error(f"❌ Failed to setup credentials: {e}")
@@ -192,13 +221,17 @@ async def chat_endpoint(request: ChatRequest):
         
         # Use standard model name format (extract from endpoint if needed)
         # Convert endpoint format to standard model name
-        if "gemini-1.5-pro" in model_endpoint:
+        if model_endpoint and "gemini-1.5-pro" in model_endpoint:
             model = "gemini-1.5-pro"
-        elif "gemini-1.5-flash" in model_endpoint:
+        elif model_endpoint and "gemini-1.5-flash" in model_endpoint:
             model = "gemini-1.5-flash" 
-        else:
+        elif model_endpoint:
             # Fallback to using the full endpoint
             model = model_endpoint
+        else:
+            # Default fallback model
+            model = "gemini-1.5-pro"
+            logger.warning("⚠️ No model endpoint specified, using default: gemini-1.5-pro")
         
         # Create content - following official documentation format
         contents = [
@@ -286,13 +319,17 @@ async def chat_stream_endpoint(request: ChatRequest):
             )
 
             # Use standard model name format (same logic as main chat endpoint)
-            if "gemini-1.5-pro" in model_endpoint:
+            if model_endpoint and "gemini-1.5-pro" in model_endpoint:
                 model = "gemini-1.5-pro"
-            elif "gemini-1.5-flash" in model_endpoint:
+            elif model_endpoint and "gemini-1.5-flash" in model_endpoint:
                 model = "gemini-1.5-flash" 
-            else:
+            elif model_endpoint:
                 # Fallback to using the full endpoint
                 model = model_endpoint
+            else:
+                # Default fallback model
+                model = "gemini-1.5-pro"
+                logger.warning("⚠️ No model endpoint specified, using default: gemini-1.5-pro")
 
             # Create content following official documentation format
             contents = [
