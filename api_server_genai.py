@@ -94,7 +94,32 @@ def setup_google_credentials():
         if os.getenv("RENDER_SERVICE_NAME"):
             logger.info("🌐 Running on Render - setting up cloud credentials")
             
-            # Try different possible secret file locations
+            # First try to use JSON credentials from environment variable directly
+            google_creds_json = os.getenv("GOOGLE_CLOUD_SERVICE_ACCOUNT_JSON")
+            if google_creds_json:
+                try:
+                    import json
+                    import io
+                    
+                    # Parse the JSON credentials
+                    creds_info = json.loads(google_creds_json)
+                    
+                    # Create credentials from service account info
+                    credentials = service_account.Credentials.from_service_account_info(
+                        creds_info,
+                        scopes=VERTEX_AI_SCOPES
+                    )
+                    logger.info("🔐 Service account credentials loaded from environment JSON")
+                    logger.info(f"🔧 Applied scopes: {len(VERTEX_AI_SCOPES)} vertex AI scopes")
+                    logger.info(f"🎯 Service account email: {creds_info.get('client_email', 'unknown')}")
+                    return True
+                    
+                except json.JSONDecodeError as e:
+                    logger.error(f"❌ Invalid JSON in GOOGLE_CLOUD_SERVICE_ACCOUNT_JSON: {e}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to load credentials from JSON env var: {e}")
+            
+            # Fallback: Try different possible secret file locations
             possible_paths = [
                 '/etc/secrets/google_creds.json',
                 '/var/secrets/google_creds.json', 
@@ -120,7 +145,7 @@ def setup_google_credentials():
                         continue
             
             if not credentials_loaded:
-                # Fallback: Use default credentials with scopes
+                # Final fallback: Use default credentials with scopes
                 logger.info("🔄 Using Application Default Credentials as fallback")
                 try:
                     from google.auth import default
