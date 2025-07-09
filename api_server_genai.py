@@ -2,6 +2,7 @@
 🚀 AI Chat Backend using Google Gen AI SDK
 FastAPI backend that connects to fine-tuned Gemini models on Vertex AI
 using the unified Google Gen AI SDK for better compatibility.
+Optimized for Render cloud deployment.
 """
 
 import logging
@@ -12,11 +13,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from dotenv import load_dotenv
-import re
-
-# Load environment variables
-load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -38,10 +34,10 @@ app = FastAPI(
     version="2.0.0"
 )
 
-# Add CORS middleware
+# Add CORS middleware - Allow all origins for cloud deployment
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8501", "http://127.0.0.1:8501"],
+    allow_origins=["*"],  # Allow all origins for Render deployment
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -51,7 +47,7 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     message: str
     temperature: Optional[float] = 0.7
-    max_tokens: Optional[int] = 8192  # Increased for detailed responses
+    max_tokens: Optional[int] = 8192
 
 class ChatResponse(BaseModel):
     response: str
@@ -85,17 +81,27 @@ async def startup_event():
     logger.info("🚀 Starting AI Chat Backend with Google Gen AI SDK...")
     
     try:
-        # Set configuration directly - consistent with successful test script
-        project_id = "bright-coyote-463315-q8"
-        location = "us-west1" 
-        model_endpoint = "projects/bright-coyote-463315-q8/locations/us-west1/endpoints/6528596580524621824"
+        # Get configuration from environment variables (set in Render)
+        project_id = os.getenv("GOOGLE_CLOUD_PROJECT", "bright-coyote-463315-q8")
+        location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-west1")
+        model_endpoint = os.getenv(
+            "VERTEX_AI_ENDPOINT", 
+            "projects/bright-coyote-463315-q8/locations/us-west1/endpoints/6528596580524621824"
+        )
         
         logger.info(f"🔧 Project: {project_id}")
         logger.info(f"🔧 Location: {location}")
         logger.info(f"🔧 Endpoint: {model_endpoint}")
-        logger.info("🔐 Using Application Default Credentials (like successful test)")
         
-        # Test client creation - following successful test script format exactly
+        # Check if we're in Render environment
+        render_service = os.getenv("RENDER_SERVICE_NAME")
+        if render_service:
+            logger.info(f"🌐 Running on Render service: {render_service}")
+            logger.info("🔐 Using Render environment credentials")
+        else:
+            logger.info("🔐 Using local development credentials")
+        
+        # Test client creation
         test_client = genai.Client(
             vertexai=True,
             project=project_id,
@@ -107,7 +113,19 @@ async def startup_event():
         
     except Exception as e:
         logger.error(f"❌ Failed to initialize backend: {e}")
-        raise
+        # Don't raise in cloud environment - continue with fallback
+        if not os.getenv("RENDER_SERVICE_NAME"):
+            raise
+
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {
+        "message": "🇲🇾 Malaysia Tourism AI Backend",
+        "status": "healthy",
+        "version": "2.0.0",
+        "endpoints": ["/health", "/chat", "/chat-stream"]
+    }
 
 @app.get("/health")
 async def health_check():
@@ -116,7 +134,8 @@ async def health_check():
         "status": "healthy",
         "message": "AI Chat Backend (Google Gen AI SDK) is running",
         "model_endpoint": model_endpoint,
-        "backend_version": "2.0.0"
+        "backend_version": "2.0.0",
+        "environment": "render" if os.getenv("RENDER_SERVICE_NAME") else "local"
     }
 
 @app.post("/chat", response_model=ChatResponse)

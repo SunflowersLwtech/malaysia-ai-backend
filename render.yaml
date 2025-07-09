@@ -2,9 +2,8 @@ services:
   # Backend API Service
   - type: web
     name: malaysia-ai-backend
-    env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn api_server_genai:app --host 0.0.0.0 --port $PORT
+    env: docker
+    dockerfilePath: ./Dockerfile
     envVars:
       - key: GOOGLE_CLOUD_PROJECT
         value: bright-coyote-463315-q8
@@ -12,17 +11,20 @@ services:
         value: us-west1
       - key: VERTEX_AI_ENDPOINT
         value: projects/bright-coyote-463315-q8/locations/us-west1/endpoints/6528596580524621824
-      - key: GOOGLE_APPLICATION_CREDENTIALS
-        sync: false  # Will be set manually
-      - key: GEMINI_API_KEY
-        sync: false  # Will be set manually
+      - key: PORT
+        value: 8000
+      # Note: GOOGLE_APPLICATION_CREDENTIALS will be set via secret file
+    healthCheckPath: /health
+    autoDeploy: true
     
-  # Frontend Streamlit Service
+  # Frontend Streamlit Service (separate deployment recommended)
   - type: web
     name: malaysia-ai-frontend
     env: python
     buildCommand: pip install -r streamlit_requirements.txt
-    startCommand: streamlit run streamlit_app.py --server.port $PORT --server.address 0.0.0.0
+    startCommand: streamlit run streamlit_app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true --server.enableCORS false
     envVars:
       - key: API_BASE_URL
-        value: https://malaysia-ai-backend.onrender.com 
+        value: https://malaysia-ai-backend.onrender.com
+    healthCheckPath: /healthz
+    autoDeploy: true 
