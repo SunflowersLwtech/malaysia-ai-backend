@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import tempfile
+from google.oauth2 import service_account
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -74,34 +75,29 @@ def clean_response_text(text: str) -> str:
 project_id = None
 location = None
 model_endpoint = None
+credentials = None
 
 def setup_google_credentials():
     """Setup Google Cloud credentials for different environments"""
+    global credentials
     try:
         # Check if we're in Render environment
         if os.getenv("RENDER_SERVICE_NAME"):
-            logger.info("🌐 Running on Render - setting up cloud credentials")
-            
-            # Get service account credentials from environment variable
-            service_account_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
-            if service_account_json:
-                # Create temporary file with service account credentials
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-                    f.write(service_account_json)
-                    temp_cred_file = f.name
-                
-                # Set environment variable to point to temp file
-                os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = temp_cred_file
-                logger.info("🔐 Service account credentials configured from environment")
+            logger.info("🌐 Running on Render - loading credentials from Secret File")
+            secret_file_path = '/etc/secrets/google_creds.json'
+            if os.path.exists(secret_file_path):
+                credentials = service_account.Credentials.from_service_account_file(secret_file_path)
+                logger.info("🔐 Service account credentials loaded successfully from Secret File.")
                 return True
             else:
-                logger.warning("⚠️ GOOGLE_SERVICE_ACCOUNT_JSON not found in environment")
+                logger.error(f"❌ Secret File not found at {secret_file_path}. Please configure it in Render dashboard.")
                 return False
         else:
             # Local development - use existing file
+            logger.info("Running in local environment")
             cred_file = "bright-coyote-463315-q8-59797318b374.json"
             if os.path.exists(cred_file):
-                os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = cred_file
+                credentials = service_account.Credentials.from_service_account_file(cred_file)
                 logger.info(f"🔐 Using local credentials: {cred_file}")
                 return True
             else:
@@ -186,11 +182,12 @@ async def chat_endpoint(request: ChatRequest):
     logger.info(f"📨 Received chat request: {request.message[:50]}...")
     
     try:
-        # Create client - following successful test script format exactly
+        # Create client - pass credentials object explicitly
         client = genai.Client(
             vertexai=True,
             project=project_id,
             location=location,
+            credentials=credentials
         )
         
         # Use endpoint path as model name
@@ -268,76 +265,58 @@ async def chat_endpoint(request: ChatRequest):
 
 @app.post("/chat-stream")
 async def chat_stream_endpoint(request: ChatRequest):
-    """Streaming chat endpoint"""
+    """Streaming chat endpoint using Google Gen AI SDK"""
     logger.info(f"📨 Received streaming chat request: {request.message[:50]}...")
     
-    def generate():
-        try:
-            # Create client
-            client = genai.Client(
-                vertexai=True,
-                project=project_id,
-                location=location,
+    try:
+        # Create client - pass credentials object explicitly
+        client = genai.Client(
+            vertexai=True,
+            project=project_id,
+            location=location,
+            credentials=credentials
+        )
+
+        # Use endpoint path as model name
+        model = model_endpoint
+
+        # Create content
+        contents = [
+            types.Content(
+                role="user",
+                parts=[types.Part(text=request.message)]
             )
-            
-            # Use the endpoint path as model name
-            model = model_endpoint
-            
-            # Create contents
-            contents = [
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_text(text=request.message)
-                    ]
-                ),
-            ]
-            
-            # Create config
-            generate_content_config = types.GenerateContentConfig(
-                temperature=request.temperature,
-                top_p=0.95,
-                seed=0,
-                max_output_tokens=request.max_tokens,
-                safety_settings=[
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_HATE_SPEECH",
-                        threshold="OFF"
-                    ),
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_DANGEROUS_CONTENT",
-                        threshold="OFF"
-                    ),
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                        threshold="OFF"
-                    ),
-                    types.SafetySetting(
-                        category="HARM_CATEGORY_HARASSMENT",
-                        threshold="OFF"
-                    )
-                ],
-            )
-            
-            # Stream response with text cleaning
-            for chunk in client.models.generate_content_stream(
-                model=model,
-                contents=contents,
-                config=generate_content_config,
-            ):
-                if chunk.text:
-                    # Clean each chunk before sending
-                    cleaned_chunk = clean_response_text(chunk.text)
-                    if cleaned_chunk:  # Only send if there's content after cleaning
-                        yield f"data: {json.dumps({'text': cleaned_chunk})}\n\n"
-            
-            yield f"data: {json.dumps({'done': True})}\n\n"
-            
-        except Exception as e:
-            logger.error(f"❌ Error in streaming: {e}")
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
-    
-    return StreamingResponse(generate(), media_type="text/plain")
+        ]
+        
+        # Generation config
+        generation_config = types.GenerationConfig(
+            max_output_tokens=request.max_tokens,
+            temperature=request.temperature,
+        )
+
+        # Send request and get streaming response
+        responses = client.generate_content(
+            model=model,
+            contents=contents,
+            generation_config=generation_config,
+            stream=True,
+        )
+        
+        # Yield each chunk
+        for chunk in responses:
+            if chunk.parts:
+                cleaned_chunk = clean_response_text(chunk.text)
+                if cleaned_chunk:
+                    yield f"data: {json.dumps({'response': cleaned_chunk})}\n\n"
+                            
+        yield f"data: {json.dumps({'done': True})}\n\n"
+
+    except Exception as e:
+        error_message = f"❌ Streaming error: {str(e)}"
+        logger.error(error_message)
+        yield f"data: {json.dumps({'error': error_message})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 @app.post("/test-chat", response_model=ChatResponse)
 async def test_chat_endpoint(request: ChatRequest):
