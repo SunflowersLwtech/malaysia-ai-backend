@@ -1,0 +1,28 @@
+services:
+  # Backend API Service
+  - type: web
+    name: malaysia-ai-backend
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api_server_genai:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GOOGLE_CLOUD_PROJECT
+        value: bright-coyote-463315-q8
+      - key: GOOGLE_CLOUD_LOCATION
+        value: us-west1
+      - key: VERTEX_AI_ENDPOINT
+        value: projects/bright-coyote-463315-q8/locations/us-west1/endpoints/6528596580524621824
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        sync: false  # Will be set manually
+      - key: GEMINI_API_KEY
+        sync: false  # Will be set manually
+    
+  # Frontend Streamlit Service
+  - type: web
+    name: malaysia-ai-frontend
+    env: python
+    buildCommand: pip install -r streamlit_requirements.txt
+    startCommand: streamlit run streamlit_app.py --server.port $PORT --server.address 0.0.0.0
+    envVars:
+      - key: API_BASE_URL
+        value: https://malaysia-ai-backend.onrender.com 
