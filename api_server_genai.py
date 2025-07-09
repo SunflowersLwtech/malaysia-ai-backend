@@ -268,17 +268,21 @@ async def chat_endpoint(request: ChatRequest):
         )
         
         # Use standard model name format (extract from endpoint if needed)
-        # Since the fine-tuned endpoint might not be available, use standard models as fallback
-        if model_endpoint and "gemini-1.5-pro" in model_endpoint:
+        # For fine-tuned models, use the full endpoint path as model name
+        if model_endpoint and model_endpoint.startswith("projects/"):
+            # This is a full endpoint path - use it directly for fine-tuned models
+            model = model_endpoint
+            logger.info(f"🎯 Using fine-tuned model endpoint: {model}")
+        elif model_endpoint and "gemini-1.5-pro" in model_endpoint:
             model = "gemini-1.5-pro"
             logger.info(f"🎯 Using Gemini 1.5 Pro (inferred from endpoint)")
         elif model_endpoint and "gemini-1.5-flash" in model_endpoint:
             model = "gemini-1.5-flash"
             logger.info(f"🎯 Using Gemini 1.5 Flash (inferred from endpoint)")
         else:
-            # For fine-tuned endpoints or when endpoint is not available, use standard model
+            # Default fallback to standard model
             model = "gemini-1.5-pro"
-            logger.info(f"🔄 Using standard Gemini 1.5 Pro (endpoint fallback: {model_endpoint})")
+            logger.info(f"🔄 Using standard Gemini 1.5 Pro (fallback)")
         
         # Create content - following official documentation format
         contents = [
@@ -290,28 +294,28 @@ async def chat_endpoint(request: ChatRequest):
             ),
         ]
         
-        # Enhanced generation config following official documentation
+        # Enhanced generation config following official documentation and user example
         generate_content_config = types.GenerateContentConfig(
             temperature=request.temperature,
-            top_p=0.95,  # More conservative for better quality
+            top_p=0.95,
             max_output_tokens=request.max_tokens,
-            # Use proper safety settings format per documentation
+            # Use proper safety settings format per user's working example
             safety_settings=[
                 types.SafetySetting(
                     category="HARM_CATEGORY_HATE_SPEECH",
-                    threshold="BLOCK_NONE"
+                    threshold="OFF"
                 ),
                 types.SafetySetting(
                     category="HARM_CATEGORY_DANGEROUS_CONTENT", 
-                    threshold="BLOCK_NONE"
+                    threshold="OFF"
                 ),
                 types.SafetySetting(
                     category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                    threshold="BLOCK_NONE"
+                    threshold="OFF"
                 ),
                 types.SafetySetting(
                     category="HARM_CATEGORY_HARASSMENT",
-                    threshold="BLOCK_NONE"
+                    threshold="OFF"
                 )
             ],
         )
@@ -366,16 +370,20 @@ async def chat_stream_endpoint(request: ChatRequest):
             )
 
             # Use standard model name format (same logic as main chat endpoint)
-            if model_endpoint and "gemini-1.5-pro" in model_endpoint:
+            if model_endpoint and model_endpoint.startswith("projects/"):
+                # This is a full endpoint path - use it directly for fine-tuned models
+                model = model_endpoint
+                logger.info(f"🎯 Stream using fine-tuned model endpoint: {model}")
+            elif model_endpoint and "gemini-1.5-pro" in model_endpoint:
                 model = "gemini-1.5-pro"
                 logger.info(f"🎯 Stream using Gemini 1.5 Pro (inferred from endpoint)")
             elif model_endpoint and "gemini-1.5-flash" in model_endpoint:
                 model = "gemini-1.5-flash"
                 logger.info(f"🎯 Stream using Gemini 1.5 Flash (inferred from endpoint)")
             else:
-                # For fine-tuned endpoints or when endpoint is not available, use standard model
+                # Default fallback to standard model
                 model = "gemini-1.5-pro"
-                logger.info(f"🔄 Stream using standard Gemini 1.5 Pro (endpoint fallback: {model_endpoint})")
+                logger.info(f"🔄 Stream using standard Gemini 1.5 Pro (fallback)")
 
             # Create content following official documentation format
             contents = [
@@ -385,7 +393,7 @@ async def chat_stream_endpoint(request: ChatRequest):
                 )
             ]
             
-            # Generation config following official documentation
+            # Generation config following user's working example
             generation_config = types.GenerateContentConfig(
                 max_output_tokens=request.max_tokens,
                 temperature=request.temperature,
@@ -393,19 +401,19 @@ async def chat_stream_endpoint(request: ChatRequest):
                 safety_settings=[
                     types.SafetySetting(
                         category="HARM_CATEGORY_HATE_SPEECH",
-                        threshold="BLOCK_NONE"
+                        threshold="OFF"
                     ),
                     types.SafetySetting(
                         category="HARM_CATEGORY_DANGEROUS_CONTENT", 
-                        threshold="BLOCK_NONE"
+                        threshold="OFF"
                     ),
                     types.SafetySetting(
                         category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                        threshold="BLOCK_NONE"
+                        threshold="OFF"
                     ),
                     types.SafetySetting(
                         category="HARM_CATEGORY_HARASSMENT",
-                        threshold="BLOCK_NONE"
+                        threshold="OFF"
                     )
                 ]
             )
